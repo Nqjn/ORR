@@ -76,6 +76,6 @@ def ReturnPriceCoords(result):
         for coord in found_raw_coords:
             cleaned_coord = [int(coord[0]), int(coord[1])]
             cleaned_coords.append(cleaned_coord)
-        return cleaned_coord
+        return cleaned_coords
     else:
         return None
