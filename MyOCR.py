@@ -25,7 +25,7 @@ def ReadData(path: str):
     return result
 
 
-def ReturnData(result):
+def ReturnPrice(result):
 
     all_words = []
     if result is None or len(result) == 0:
@@ -37,8 +37,9 @@ def ReturnData(result):
         all_words.append(txt_lowered)
         print(f"Slovo {i}: {txt_original} (lowered: {txt_lowered})")
 
-        if 'celkem' in txt_lowered or 'celkcm' in txt_lowered or 'platbě' in txt_lowered or 'platbe' in txt_lowered or 'k platbě' in txt_lowered or 'k platbe' in txt_lowered:
-            if i >0:
+        keywords = ['celkem', 'celkcm', 'platbě', 'platbe', 'k platbě', 'k platbe']
+        if any(keyword in txt_lowered for keyword in keywords):
+            if i +1 < len(result):
                 value = result[i+1][1]
                 print(f"Nalezeno hledané Heslo na pozici {i}, vracím následující hodnotu: {value}")
                 return value
@@ -46,3 +47,35 @@ def ReturnData(result):
                 print("Nalezeno hledané Heslo na poslední pozici, není nadcházející hodnota k vrácení.")
                 return None
     return all_words
+
+def ReturnPriceCoords(result):
+    cleaned_coords = []
+    found_raw_coords =  None
+    
+    keywords = ['celkem', 'celkcm', 'platbě', 'platbe', 'k platbě', 'k platbe']
+
+    if result is None or len(result) == 0:
+        return None
+    
+    for i, res in enumerate(result):
+        txt_original = res[1]
+        txt_lowered = txt_original.lower()
+        
+
+
+        if any(keyword in txt_lowered for keyword in keywords):
+            if i +1 < len(result):
+                found_raw_coords = result[i+1][0]
+                print(f"Nalezeno heslo '{res[1]}', beru souřadnice následující ceny.")
+                break
+            else:
+                found_raw_coords = res  [0]
+                break
+
+    if found_raw_coords:
+        for coord in found_raw_coords:
+            cleaned_coord = [int(coord[0]), int(coord[1])]
+            cleaned_coords.append(cleaned_coord)
+        return cleaned_coord
+    else:
+        return None

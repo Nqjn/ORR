@@ -8,7 +8,9 @@ def main():
     print(f"Vybraný soubor z GUI: {res}")
     if res is not None:
         r = ReadData(res)
-        final_txt = ReturnData(r)
+        final_txt = ReturnPrice(r)
+        coords = ReturnPriceCoords(r)
+        print(f"Souřadnice nalezené ceny: {coords}")
         print(f"Získaná data: {final_txt}")
         #print(f"Získaná data: {data}")
     else:
