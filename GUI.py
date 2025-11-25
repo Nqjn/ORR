@@ -4,6 +4,8 @@ import os
 from PIL import Image, ImageDraw, ImageOps
 import threading
 
+from MyOCR import ReturnPrice
+
 # Import logiky z MyOCR.py
 try:
     from MyOCR import ReadData, ReturnPriceCoords
@@ -122,65 +124,110 @@ class VyberSouboruApp(ctk.CTk):
             # Vlákno skončilo! Můžeme bezpečně aktualizovat GUI.
             self.finalize_gui_update()
 
-    def thread_ocr_logic(self):
-        """
-        Tato funkce běží na pozadí.
-        NIKDY nesahá na self.after, self.label, ani nic z GUI.
-        Jen ukládá data do self._thread_result_...
-        """
+    def draw_rect_on_image(self, coords = None):
         actual_path = self.vybrana_cesta
-        
+
         if actual_path is None:
             return
+        
+        raw_data = ReadData(actual_path)
+        self.ocr_finall_data = raw_data 
 
+        if coords is None:
+            coords = ReadData(actual_path)
+        poly_coords = []
+
+        
         try:
-            # A) OCR a Data
+            original_image = Image.open(actual_path)
+            try:
+                original_image = ImageOps.exif_transpose(original_image)
+            except:
+                pass
+
+            original_image = original_image.convert("RGB")
+            draw = ImageDraw.Draw(original_image) 
+
+            for point in coords:
+                if isinstance(point, (list, tuple)) and len(point) >= 2:
+                    poly_coords.append((point[0], point[1]))
+                    
+            if len(poly_coords) >= 2:
+                draw.polygon(poly_coords, outline="red", width=10)
+            return original_image
+        except Exception as e:
+            print(f"Chyba při kreslení na obrázek: {e}")
+    
+    def _load_image(self, path: str):
+        try:
+            img = Image.open(path)
+            try:
+                img = ImageOps.exif_transpose(img)
+            except:
+                pass
+            return img.convert("RGB")
+        except Exception as e:
+            print(f"Chyba při načítání obrázku: {e}")
+            return None
+        
+    def _draw_rect(self, img, coords):
+        if self.vybrana_cesta is None:
+            return img
+
+        if coords is None:
+            coords = ReturnPriceCoords(ReadData(self.vybrana_cesta))
+        
+        try:
+            draw = ImageDraw.Draw(img) 
+            poly_coords = []
+            if coords is None:
+                return img
+            
+            for point in coords:
+                if isinstance(point, (list, tuple)) and len(point) >= 2:
+                    poly_coords.append((point[0], point[1]))
+                    
+            if len(poly_coords) >= 2:
+                draw.polygon(poly_coords, outline="red", width=10)
+            return img
+        except Exception as e:
+            print(f"Chyba při kreslení na obrázek: {e}")
+            return img
+    
+    def _resize_image(self, img, target_width=600):
+        w_percent = (target_width / float(img.size[0]))
+        h_size = int((float(img.size[1]) * float(w_percent)))
+        
+        # Kompatibilita verzí Pillow
+        try:
+            resample_mode = Image.Resampling.BILINEAR
+        except AttributeError:
+            resample_mode = 2 
+
+        return img.resize((target_width, h_size), resample_mode)
+
+    def thread_ocr_logic(self):
+        actual_path = self.vybrana_cesta
+
+        if actual_path is None:
+            return
+        
+        try:
             raw_data = ReadData(actual_path)
             self.ocr_finall_data = raw_data 
-
             coords = ReturnPriceCoords(raw_data)
 
             if coords:
-                orig_image = Image.open(actual_path)
-                try:
-                    orig_image = ImageOps.exif_transpose(orig_image)
-                except:
-                    pass
-                orig_image = orig_image.convert("RGB")
-                
-                draw = ImageDraw.Draw(orig_image)
-                
-                poly_coords = []
-                for point in coords:
-                    if isinstance(point, (list, tuple)) and len(point) >= 2:
-                        poly_coords.append((point[0], point[1]))
-                    
-                if len(poly_coords) >= 2:
-                    draw.polygon(poly_coords, outline="red", width=10)
-                
-                # Optimalizace velikosti pro GUI
-                target_width = 600
-                w_percent = (target_width / float(orig_image.size[0]))
-                h_size = int((float(orig_image.size[1]) * float(w_percent)))
-                
-                # Kompatibilita verzí Pillow
-                try:
-                    resample_mode = Image.Resampling.BILINEAR
-                except AttributeError:
-                    resample_mode = 2 
-
-                preview_image = orig_image.resize((target_width, h_size), resample_mode)
-                
-                # ULOŽÍME VÝSLEDEK DO PROMĚNNÉ
-                self._thread_result_image = preview_image
-            
-            self._thread_result_msg = "Hotovo"
-
+                original_image = self._load_image(actual_path)
+                marked_image = self._draw_rect(original_image, coords)
+                resized_image = self._resize_image(marked_image, target_width=600)
+                self._thread_result_image = resized_image
+            self._thread_result_msg = f"OCR dokončeno. Cena je: {ReturnPrice(raw_data)}"
         except Exception as e:
-            print(f"Chyba ve vlákně: {e}")
-            self._thread_result_msg = f"Chyba: {e}"
-        
-        # Konec vlákna.
+            print(f"Chyba v OCR vlákně: {e}")
+            import traceback
+            traceback.print_exc()
+            self._thread_result_msg = f"Chyba během OCR: {e}"
 
     def finalize_gui_update(self):
         """

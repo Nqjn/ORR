@@ -1,6 +1,7 @@
 import easyocr
 import os 
 from PIL import Image, ImageOps
+import re
 
 def ReadData(path: str):
     _ , suffix = os.path.splitext(path)
@@ -79,3 +80,5 @@ def ReturnPriceCoords(result):
         return cleaned_coords
     else:
         return None
+
+
