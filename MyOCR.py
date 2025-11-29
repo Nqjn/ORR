@@ -39,6 +39,7 @@ def ReturnPrice(result):
         print(f"Slovo {i}: {txt_original} (lowered: {txt_lowered})")
 
         keywords = ['celkem', 'celkcm', 'platbě', 'platbe', 'k platbě', 'k platbe']
+
         if any(keyword in txt_lowered for keyword in keywords):
             if i +1 < len(result):
                 value = result[i+1][1]
@@ -81,4 +82,63 @@ def ReturnPriceCoords(result):
     else:
         return None
 
+def ReturnDateCoords(result):
+    print("Hledám souřadnice data...")
+    cleaned_coords = []
+    found_raw_coords =  None
+    
+    pattern = r"\b(\d{1,2})\s*[\.\-]\s*(\d{1,2})\s*[\.\-]\s*(\d{4})\b"
+    
+    iso_date_pattern = re.compile(r'\b\d{4}\s*[.,\-/]\s*\d{1,2}\s*[.,\-/]\s*\d{1,2}\b')
 
+    keywords = ['datum', 'dne', 'date', 'time', 'duzp']
+
+    for i, res in enumerate(result):
+        txt_original = res[1]
+        box = res[0]
+
+        if not isinstance(txt_original, str):
+            continue
+
+        txt_lowered = txt_original.lower()
+
+        if any(keyword in txt_lowered for keyword in keywords) or re.search(pattern, txt_original) or iso_date_pattern.search(txt_original):
+            found_raw_coords = box
+            print(f"Nalezeno datum v textu '{txt_original}', beru souřadnice.")
+            break
+
+
+        if any(keywords in txt_lowered for keywords in keywords):
+            if i +1 < len(result):
+                next_item = result[i+1]
+                next_txt = next_item[1]
+
+            if re.search(pattern, next_txt) or iso_date_pattern.search(next_txt):
+                                print(f"Nalezen popisek '{txt_original}', datum je hned vedle: '{next_txt}'")
+                                found_raw_coords = next_item[0] # Bereme souřadnice toho souseda
+                                break
+    if found_raw_coords:
+            # Kontrola, zda found_raw_coords je seznam
+            if not isinstance(found_raw_coords, (list, tuple)):
+                print(f"Chyba: Nalezené souřadnice nejsou seznam: {found_raw_coords}")
+                return None
+                
+            try:
+                for coord in found_raw_coords:
+                    # Očekáváme bod ve formátu [x, y]
+                    if isinstance(coord, (list, tuple)) and len(coord) >= 2:
+                        cleaned_coord = [int(coord[0]), int(coord[1])]
+                        cleaned_coords.append(cleaned_coord)
+                    else:
+                        print(f"Přeskakuji neplatný bod: {coord}")
+                
+                # Pokud máme validní body, vrátíme je
+                if len(cleaned_coords) > 0:
+                    return cleaned_coords
+                
+            except Exception as e:
+                print(f"Chyba při konverzi souřadnic: {e}")
+                return None
+
+        # Pokud se nic nenašlo nebo nastala chyba
+    return None

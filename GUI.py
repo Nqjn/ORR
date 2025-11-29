@@ -4,7 +4,7 @@ import os
 from PIL import Image, ImageDraw, ImageOps
 import threading
 
-from MyOCR import ReturnPrice
+from MyOCR import ReturnPrice, ReturnDateCoords
 
 # Import logiky z MyOCR.py
 try:
@@ -179,6 +179,9 @@ class VyberSouboruApp(ctk.CTk):
         
         try:
             draw = ImageDraw.Draw(img) 
+
+            line_width = int(img.size[0] * 0.005)
+            lined_width = max(1, line_width)
             poly_coords = []
             if coords is None:
                 return img
@@ -188,7 +191,8 @@ class VyberSouboruApp(ctk.CTk):
                     poly_coords.append((point[0], point[1]))
                     
             if len(poly_coords) >= 2:
-                draw.polygon(poly_coords, outline="red", width=10)
+                
+                draw.polygon(poly_coords, outline="red", width=lined_width)
             return img
         except Exception as e:
             print(f"Chyba při kreslení na obrázek: {e}")
@@ -215,13 +219,20 @@ class VyberSouboruApp(ctk.CTk):
         try:
             raw_data = ReadData(actual_path)
             self.ocr_finall_data = raw_data 
-            coords = ReturnPriceCoords(raw_data)
+            coords_price = ReturnPriceCoords(raw_data)
+            coords_date = ReturnDateCoords(raw_data)
 
-            if coords:
-                original_image = self._load_image(actual_path)
-                marked_image = self._draw_rect(original_image, coords)
-                resized_image = self._resize_image(marked_image, target_width=600)
-                self._thread_result_image = resized_image
+
+            current_image = self._load_image(actual_path)
+            if coords_price:
+                current_image = self._draw_rect(current_image, coords_price)
+
+            if coords_date:
+                current_image = self._draw_rect(current_image, coords_date)
+
+            if coords_date or coords_price:
+                self._thread_result_image = self._resize_image(current_image, target_width=600)
+    
             self._thread_result_msg = f"OCR dokončeno. Cena je: {ReturnPrice(raw_data)}"
         except Exception as e:
             print(f"Chyba v OCR vlákně: {e}")
