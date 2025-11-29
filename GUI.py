@@ -4,11 +4,9 @@ import os
 from PIL import Image, ImageDraw, ImageOps
 import threading
 
-from MyOCR import ReturnPrice, ReturnDateCoords
-
 # Import logiky z MyOCR.py
 try:
-    from MyOCR import ReadData, ReturnPriceCoords
+    from MyOCR import MyOCR, ReturnPriceCoords, ReturnPrice
 except ImportError:
     print("POZOR: Soubor MyOCR.py nebyl nalezen.")
 
@@ -28,9 +26,14 @@ class VyberSouboruApp(ctk.CTk):
         self._thread_result_image = None 
         self._thread_result_msg = ""
         self._ocr_thread = None 
+        
 
         self.title("ORR - Výběr souboru")
         self.geometry("1000x700")
+        try:
+            self.ocr_engine = MyOCR()
+        except ImportError:
+            print("POZOR: OCR engine nebyl inicializován.")
 
         # --- OVLÁDÁNÍ ---
         self.frame_control = ctk.CTkFrame(self, width=250)
@@ -94,6 +97,10 @@ class VyberSouboruApp(ctk.CTk):
                 self.show_image_preview(None)
 
     def start_ocr_process(self):
+        if not self.ocr_engine:
+            self.lable_status.configure(text="OCR engine není dostupný.")
+            return
+        # self.btn_compile.configure(steate="disabled", text="Zpracovávám...")
         """Spustí vlákno a začne ho sledovat (Polling)."""
         self.btn_compile.configure(state="disabled", text="Zpracovávám...")
         self.btn_vybrat.configure(state="disabled")
@@ -124,40 +131,6 @@ class VyberSouboruApp(ctk.CTk):
             # Vlákno skončilo! Můžeme bezpečně aktualizovat GUI.
             self.finalize_gui_update()
 
-    def draw_rect_on_image(self, coords = None):
-        actual_path = self.vybrana_cesta
-
-        if actual_path is None:
-            return
-        
-        raw_data = ReadData(actual_path)
-        self.ocr_finall_data = raw_data 
-
-        if coords is None:
-            coords = ReadData(actual_path)
-        poly_coords = []
-
-        
-        try:
-            original_image = Image.open(actual_path)
-            try:
-                original_image = ImageOps.exif_transpose(original_image)
-            except:
-                pass
-
-            original_image = original_image.convert("RGB")
-            draw = ImageDraw.Draw(original_image) 
-
-            for point in coords:
-                if isinstance(point, (list, tuple)) and len(point) >= 2:
-                    poly_coords.append((point[0], point[1]))
-                    
-            if len(poly_coords) >= 2:
-                draw.polygon(poly_coords, outline="red", width=10)
-            return original_image
-        except Exception as e:
-            print(f"Chyba při kreslení na obrázek: {e}")
-    
     def _load_image(self, path: str):
         try:
             img = Image.open(path)
@@ -171,27 +144,20 @@ class VyberSouboruApp(ctk.CTk):
             return None
         
     def _draw_rect(self, img, coords):
-        if self.vybrana_cesta is None:
-            return img
+        if self.vybrana_cesta is None or img is None or coords is None: return img
 
-        if coords is None:
-            coords = ReturnPriceCoords(ReadData(self.vybrana_cesta))
-        
         try:
             draw = ImageDraw.Draw(img) 
 
             line_width = int(img.size[0] * 0.005)
             lined_width = max(1, line_width)
             poly_coords = []
-            if coords is None:
-                return img
-            
+
             for point in coords:
                 if isinstance(point, (list, tuple)) and len(point) >= 2:
                     poly_coords.append((point[0], point[1]))
                     
             if len(poly_coords) >= 2:
-                
                 draw.polygon(poly_coords, outline="red", width=lined_width)
             return img
         except Exception as e:
@@ -213,15 +179,15 @@ class VyberSouboruApp(ctk.CTk):
     def thread_ocr_logic(self):
         actual_path = self.vybrana_cesta
 
-        if actual_path is None:
-            return
+        if actual_path is None: return
         
         try:
-            raw_data = ReadData(actual_path)
-            self.ocr_finall_data = raw_data 
-            coords_price = ReturnPriceCoords(raw_data)
-            coords_date = ReturnDateCoords(raw_data)
-
+            self.ocr_engine.analyze_image(actual_path)
+            raw_data = self.ocr_engine.current_data
+            self.ocr_finall_data = self.ocr_engine.analyze_image(actual_path)
+            coords_price = self.ocr_engine.get_price_coords()
+            coords_date = self.ocr_engine.get_date_coords()
+            price_value = self.ocr_engine.get_price()
 
             current_image = self._load_image(actual_path)
             if coords_price:
@@ -233,7 +199,7 @@ class VyberSouboruApp(ctk.CTk):
             if coords_date or coords_price:
                 self._thread_result_image = self._resize_image(current_image, target_width=600)
     
-            self._thread_result_msg = f"OCR dokončeno. Cena je: {ReturnPrice(raw_data)}"
+            self._thread_result_msg = f"OCR dokončeno. Cena je: {price_value}"
         except Exception as e:
             print(f"Chyba v OCR vlákně: {e}")
             import traceback
