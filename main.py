@@ -11,6 +11,9 @@ def main():
         final_txt = ReturnPrice(res)
         coords = ReturnPriceCoords(res)
 
+        date_coords = ReturnDateCoords(res)
+        print(f"Souřadnice data: {date_coords}")
+
 
         print(f"Souřadnice nalezené ceny: {coords}")
         print(f"Získaná data: {final_txt}")
