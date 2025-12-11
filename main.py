@@ -1,48 +1,51 @@
-from Excel import * # Pokud používáš, jinak můžeš smazat
 from GUI import create_window
 from MyOCR import MyOCR
+from ExcelHandler import ExcelHandler
+import os
 
 def main():
-    # 1. Spustíme GUI a počkáme, až uživatel vybere a potvrdí oblasti
-    data_z_gui = create_window()
+    # 1. Run GUI to select file and coords
+    gui_data = create_window()
 
-    if data_z_gui:
-        print("\n--- ZPRACOVÁNÍ VÝSLEDKŮ ---")
-        print(f"Vybraný soubor: {data_z_gui['filepath']}")
+    if gui_data:
+        print("\n--- PROCESSING DATA ---")
+        filepath = gui_data['filepath']
         
-        # 2. Inicializujeme OCR engine (díky Singletonu se model nenačítá znovu, pokud už je v paměti)
+        # 2. Extract text using OCR on specific regions
         ocr_engine = MyOCR()
         
-        # Cesta k obrázku
-        path = data_z_gui['filepath']
+        final_price = None
+        final_date = None
 
-        # --- CENA ---
-        price_coords = data_z_gui.get('price_coords')
-        if price_coords:
-            print(f"Používám souřadnice pro Cenu: {price_coords}")
-            # Tady voláme tu novou funkci pro výřez!
-            final_price_text = ocr_engine.get_text_from_region(path, price_coords)
-            print(f"-> PŘEČTENÁ CENA Z VÝŘEZU: '{final_price_text}'")
-        else:
-            print("Cena nebyla označena.")
+        # Get Price Text
+        if gui_data.get('price_coords'):
+            final_price = ocr_engine.get_text_from_region(filepath, gui_data['price_coords'])
+            print(f"Price Found: {final_price}")
+        
+        # Get Date Text
+        if gui_data.get('date_coords'):
+            final_date = ocr_engine.get_text_from_region(filepath, gui_data['date_coords'])
+            print(f"Date Found: {final_date}")
 
-        print("-" * 30)
+        # 3. Prepare Data for Excel
+        excel_data = {
+            'price': final_price,
+            'date': final_date,
+            'filename': os.path.basename(filepath)
+        }
 
-        # --- DATUM ---
-        date_coords = data_z_gui.get('date_coords')
-        if date_coords:
-            print(f"Používám souřadnice pro Datum: {date_coords}")
-            # Tady voláme tu novou funkci pro výřez!
-            final_date_text = ocr_engine.get_text_from_region(path, date_coords)
-            print(f"-> PŘEČTENÉ DATUM Z VÝŘEZU: '{final_date_text}'")
-        else:
-            print("Datum nebylo označeno.")
-
-        # Zde případně můžeš volat ukládání do Excelu
-        # save_to_excel(final_price_text, final_date_text) ...
+        # 4. Generate Excel
+        # Make sure you have a file named 'template.xlsx' in your folder!
+        template_file = "template.xlsx" 
+        
+        # Create output filename (e.g., "Invoice_originalName.xlsx")
+        output_filename = f"Invoice_{os.path.splitext(os.path.basename(filepath))[0]}.xlsx"
+        
+        handler = ExcelHandler(template_file)
+        handler.create_invoice(output_filename, excel_data)
 
     else:
-        print("Aplikace byla ukončena bez výběru dat.")
+        print("No data selected.")
 
 if __name__ == "__main__":
     main()

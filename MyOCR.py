@@ -186,35 +186,6 @@ def ReturnDateCoords(data):
                 print(f"Date Simple Match: {txt_original}")
                 return _clean_coords_helper(res[0])
             
-    
-            
-    # if any (k in txt_lowered for k in keywords):
-    #         print(f"Date Keyword Match: {txt_original}")
-            
-    #         merged_text = ' '
-    #         involved_boxes = []
-
-    #         search_depth = 3
-            
-    #         for offset in range(0, search_depth):
-    #             current_index = i + offset
-    #             if current_index < len(data): break
-
-    #             item = data[current_index]
-    #             text = item[1]
-    #             box = item[0]
-
-    #             if not isinstance(text, str): continue
-
-    #             merged_text += text + ' '
-    #             involved_boxes.append(box)
-
-    #             for pat in patterns:
-    #                 if re.search(pat, merged_text):
-    #                     print(f"Date Merged Match: {merged_text}")
-    #                     union_box = _get_union_coords(involved_boxes)
-    #                     return _clean_coords_helper(union_box)
-
     return None
 
 def ReturnDate(data):
@@ -243,32 +214,6 @@ def _make_string(data):
         return ""
     texts = [res[1] for res in data if isinstance(res[1], str)]
     return '.'.join(texts)
-
-
-             
-def _get_union_coords(boxes_list):
-    if not boxes_list:
-        return None
-    
-    min_x  = float('inf')
-    min_y  = float('inf')
-    max_x  = float('-inf')
-    max_y  = float('-inf')
-
-    for box in boxes_list:
-        for point in box:
-            x, y = point
-            if x < min_x: min_x = x
-            if y < min_y: min_y = y
-            if x > max_x: max_x = x
-            if y > max_y: max_y = y
-    return[
-        [min_x, min_y],
-        [max_x, min_y],
-        [max_x, max_y],
-        [min_x, max_y]
-
-    ]
 
 
 def _clean_coords_helper(raw_box):
