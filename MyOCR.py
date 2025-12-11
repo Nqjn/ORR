@@ -2,6 +2,7 @@ import easyocr
 import os 
 from PIL import Image, ImageOps
 import re
+import numpy as np
 from typing import List, Tuple, Any, Optional
 
 class MyOCR:
@@ -49,6 +50,56 @@ class MyOCR:
                 os.remove(path_to_ocr)
 
         return self.current_data
+    
+    def get_text_from_region(self, path: str, coords: List[List[int]]) -> str:
+        """
+        Provede OCR pouze na vybraném výřezu obrázku definovaném souřadnicemi.
+        
+        Args:
+            path (str): Cesta k souboru s obrázkem.
+            coords (list): Seznam bodů [[x1, y1], [x2, y1], [x2, y2], [x1, y2]] 
+                           nebo jen bounding box.
+        
+        Returns:
+            str: Nalezený text spojený do jednoho řetězce.
+        """
+        if not os.path.exists(path):
+            return "Chyba: Soubor neexistuje."
+
+        try:
+            # 1. Načtení a příprava obrázku
+            img = Image.open(path)
+            img = ImageOps.exif_transpose(img) # Otočení podle EXIF dat
+            
+            # 2. Výpočet Bounding Boxu (min_x, min_y, max_x, max_y)
+            # Tím zajistíme, že to funguje, ať už pošlete 4 body (polygon) nebo 2 body
+            xs = [point[0] for point in coords]
+            ys = [point[1] for point in coords]
+            
+            min_x = max(0, min(xs))
+            min_y = max(0, min(ys))
+            max_x = min(img.width, max(xs))
+            max_y = min(img.height, max(ys))
+
+            # Pokud je výběr příliš malý (např. omylem kliknuto), vrátíme prázdno
+            if (max_x - min_x) < 5 or (max_y - min_y) < 5:
+                return ""
+
+            # 3. Oříznutí obrázku (Crop)
+            cropped_img = img.crop((min_x, min_y, max_x, max_y))
+
+            # 4. Konverze pro EasyOCR (PIL -> Numpy Array)
+            img_np = np.array(cropped_img)
+
+            # 5. Spuštění OCR na výřezu
+            # detail=0 vrátí rovnou seznam stringů bez souřadnic a confidence score
+            results = self.reader.readtext(img_np, detail=0)
+            
+            # Spojíme nalezené řádky do jednoho textu
+            return " ".join([str(x) for x in results])
+        except Exception as e:
+            print(f"Chyba při OCR výřezu: {e}")
+            return ""
 
     # --- Methods that use the Standalone Functions below ---
     def get_price(self):

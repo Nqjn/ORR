@@ -1,261 +1,353 @@
+import tkinter
 import customtkinter as ctk
 from tkinter import filedialog
 import os
-from PIL import Image, ImageDraw, ImageOps
+from PIL import Image, ImageOps, ImageTk 
 import threading
+from typing import Any, List, Optional
 
-# Import logiky z MyOCR.py
+# --- IMPORT VLASTNÍHO OCR ---
 try:
     from MyOCR import MyOCR, ReturnPriceCoords, ReturnPrice
 except ImportError:
-    print("POZOR: Soubor MyOCR.py nebyl nalezen.")
+    print("WARNING: MyOCR.py file not found. OCR features will not work.")
 
-# Nastavení vzhledu
 ctk.set_appearance_mode("System")
 ctk.set_default_color_theme("blue")
 
-class VyberSouboruApp(ctk.CTk):
+class FileSelectorApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         
-        self.vybrana_cesta = None
-        self.ocr_finall_data = None 
-        self._image_ref = None 
+        # --- DATA ---
+        self.selected_path = None
+        self.ocr_raw_data = None 
         
-        # Proměnné pro přenos dat z vlákna
+        # Zde budeme držet originální PIL obrázek pro opakované zmenšování
+        self.original_image = None 
+        self._tk_image_ref = None # Reference pro tkinter (aby ji nesmazal GC)
+        
+        self.scale_ratio = 1.0
+        
+        # Drag & Drop proměnné
+        self.drag_data = {
+            "x": 0, "y": 0, 
+            "item": None,
+            "mode": None,
+            "group_tag": None,
+            "corner": None
+        }
+        
+        self.detected_coords: dict[str, Any] = {"price": None, "date": None}
+        self.final_output_data = None 
+
+        # Vlákna
         self._thread_result_image = None 
         self._thread_result_msg = ""
         self._ocr_thread = None 
-        
 
-        self.title("ORR - Výběr souboru")
-        self.geometry("1000x700")
+        # --- GUI ---
+        self.title("OCR - File Selection (Responsive)")
+        self.geometry("1200x800")
+
+        # Inicializace OCR
+        self.ocr_engine = None
         try:
             self.ocr_engine = MyOCR()
-        except ImportError:
-            print("POZOR: OCR engine nebyl inicializován.")
+        except: pass
 
-        # --- OVLÁDÁNÍ ---
-        self.frame_control = ctk.CTkFrame(self, width=250)
-        self.frame_control.pack(side="left", fill="y", padx=10, pady=10)
+        # === LEFT PANEL ===
+        self.control_frame = ctk.CTkFrame(self, width=250)
+        self.control_frame.pack(side="left", fill="y", padx=10, pady=10)
         
-        self.label_instrukce = ctk.CTkLabel(self.frame_control, text="Vyberte soubor:", font=("Arial", 16))
-        self.label_instrukce.pack(pady=(30, 10))
+        ctk.CTkLabel(self.control_frame, text="Select File:", font=("Arial", 16)).pack(pady=(20, 10))
+        
+        self.select_btn = ctk.CTkButton(self.control_frame, text="Open Image...", command=self.open_file_dialog)
+        self.select_btn.pack(pady=10)
 
-        self.btn_vybrat = ctk.CTkButton(self.frame_control, text="Vybrat soubor...", command=self.open_dialog)
-        self.btn_vybrat.pack(pady=10)
+        self.path_label = ctk.CTkLabel(self.control_frame, text="...", text_color="gray", wraplength=230)
+        self.path_label.pack(pady=5)
 
-        self.label_cesta = ctk.CTkLabel(self.frame_control, text="...", text_color="gray", wraplength=230)
-        self.label_cesta.pack(pady=10)
-
-        self.btn_compile = ctk.CTkButton(
-            self.frame_control,
-            text="Potvrdit a Zpracovat", 
-            command=self.start_ocr_process, 
-            fg_color="green", 
-            hover_color="darkgreen",
-            state="disabled"
+        self.process_btn = ctk.CTkButton(
+            self.control_frame, text="Start OCR", command=self.start_ocr_process, 
+            state="disabled", fg_color="green"
         )
-        self.btn_compile.pack(pady=30) 
-
-        self.progress_bar = ctk.CTkProgressBar(self.frame_control, width=200)
+        self.process_btn.pack(pady=20) 
+        
+        self.progress_bar = ctk.CTkProgressBar(self.control_frame)
         self.progress_bar.set(0)
-        self.progress_bar.pack(pady=10)
         self.progress_bar.pack_forget()
 
-        self.lable_status = ctk.CTkLabel(self.frame_control, text="")
-        self.lable_status.pack(pady=5)
+        self.status_label = ctk.CTkLabel(self.control_frame, text="", wraplength=230)
+        self.status_label.pack(pady=5)
 
-        # --- NÁHLED ---
-        self.frame_image = ctk.CTkFrame(self)
-        self.frame_image.pack(side="right", fill="both", expand=True, padx=10, pady=10)
+        # MANUAL CONTROLS
+        self.frame_manual = ctk.CTkFrame(self.control_frame)
+        self.frame_manual.pack(pady=20, fill="x", padx=5)
+        ctk.CTkLabel(self.frame_manual, text="Manual Correction:", font=("Arial", 12, "bold")).pack(pady=5)
+        ctk.CTkButton(self.frame_manual, text="+ Add Price Box", fg_color="red", 
+                      command=lambda: self.add_manual_box("price", "red")).pack(pady=5, padx=5, fill="x")
+        ctk.CTkButton(self.frame_manual, text="+ Add Date Box", fg_color="blue", 
+                      command=lambda: self.add_manual_box("date", "blue")).pack(pady=5, padx=5, fill="x")
 
-        self.image_label = ctk.CTkLabel(self.frame_image, text="Náhled obrázku bude zde")
-        self.image_label.pack(fill="both", expand=True, padx=10, pady=10)
+        # === RIGHT PANEL (IMAGE CANVAS) ===
+        self.image_frame = ctk.CTkFrame(self)
+        self.image_frame.pack(side="right", fill="both", expand=True, padx=10, pady=10)
 
-    def open_dialog(self):
-        cesta = filedialog.askopenfilename(
-            filetypes=[("Images", "*.png;*.jpg;*.jpeg"), ("Excel", "*.xlsx"), ("All", "*.*")]
+        # Canvas
+        self.canvas = tkinter.Canvas(self.image_frame, bg="#2b2b2b", highlightthickness=0)
+        self.canvas.pack(fill="both", expand=True, padx=0, pady=0)
+        
+        # Placeholder text
+        self.text_id = self.canvas.create_text(
+            400, 300, text="Image Preview", fill="gray", font=("Arial", 16)
         )
-        if cesta:
-            self.vybrana_cesta = cesta
-            self.label_cesta.configure(text=f"Vybráno: {os.path.basename(cesta)}")
-            self.btn_compile.configure(state="normal")
 
-            if cesta.lower().endswith(('.png', '.jpg', '.jpeg')):
-                try:
-                    img = Image.open(cesta)
-                    try:
-                        img = ImageOps.exif_transpose(img)
-                    except:
-                        pass
-                    # První náhled (bez resize, show_image_preview si to zmenší samo)
-                    self.show_image_preview(img)
-                except Exception as e:
-                    print(f"Chyba náhledu: {e}")
-            else:
-                self.show_image_preview(None)
+        # === BINDING EVENTS ===
+        self.canvas.bind("<Button-1>", self.on_drag_start)
+        self.canvas.bind("<B1-Motion>", self.on_drag_motion)
+        self.canvas.bind("<ButtonRelease-1>", self.on_drag_stop)
+        
+        # DŮLEŽITÉ: Bindování změny velikosti okna
+        self.canvas.bind("<Configure>", self.on_resize)
 
-    def start_ocr_process(self):
-        if not self.ocr_engine:
-            self.lable_status.configure(text="OCR engine není dostupný.")
-            return
-        # self.btn_compile.configure(steate="disabled", text="Zpracovávám...")
-        """Spustí vlákno a začne ho sledovat (Polling)."""
-        self.btn_compile.configure(state="disabled", text="Zpracovávám...")
-        self.btn_vybrat.configure(state="disabled")
-        self.progress_bar.pack(pady=10)
-        self.progress_bar.start()
-        self.lable_status.configure(text="OCR běží...")
+    # --- RESIZING LOGIC ---
+    def on_resize(self, event):
+        """Volá se automaticky, když se změní velikost okna/canvasu."""
+        if self.original_image:
+            # Překreslíme obrázek podle nové velikosti canvasu
+            self.show_image_on_canvas(draw_boxes=True)
 
-        # Vyčistíme staré výsledky
-        self._thread_result_image = None
-        self._thread_result_msg = "Probíhá..."
+    def show_image_on_canvas(self, draw_boxes=False):
+        """Vypočítá novou velikost a vykreslí obrázek i boxy."""
+        if self.original_image is None: return
 
-        # Spustíme vlákno
-        self._ocr_thread = threading.Thread(target=self.thread_ocr_logic)
-        self._ocr_thread.start()
+        # Zjistíme aktuální rozměry canvasu
+        canvas_width = self.canvas.winfo_width()
+        canvas_height = self.canvas.winfo_height()
+        
+        # Pokud je canvas příliš malý (např. při startu), nic neděláme
+        if canvas_width < 10 or canvas_height < 10: return
 
-        # Spustíme sledování vlákna (každých 100ms)
-        self.monitor_ocr_thread()
+        self.canvas.delete("all")
 
-    def monitor_ocr_thread(self):
-        """
-        Toto běží v hlavním vlákně.
-        Kontroluje, zda vlákno stále běží. Pokud ne, aktualizuje GUI.
-        """
-        if self._ocr_thread is not None and self._ocr_thread.is_alive():
-            # Vlákno stále běží, zkontrolujeme znovu za 100ms
-            self.after(100, self.monitor_ocr_thread)
+        # --- MATEMATIKA FIT-TO-WINDOW ---
+        img_w, img_h = self.original_image.size
+        
+        # Spočítáme poměry
+        ratio_w = canvas_width / img_w
+        ratio_h = canvas_height / img_h
+        
+        # Vybereme menší poměr -> obrázek se vejde celý (contain)
+        self.scale_ratio = min(ratio_w, ratio_h)
+        
+        new_w = int(img_w * self.scale_ratio)
+        new_h = int(img_h * self.scale_ratio)
+
+        # Změníme velikost obrázku (používáme originál jako zdroj!)
+        resized_pil = self.original_image.resize((new_w, new_h), Image.Resampling.BILINEAR)
+        self._tk_image_ref = ImageTk.PhotoImage(resized_pil)
+
+        # Vykreslíme (zarovnáno vlevo nahoře 0,0 - nejjednodušší pro souřadnice)
+        self.canvas.create_image(0, 0, image=self._tk_image_ref, anchor="nw")
+
+        # Pokud máme zapnuté boxy, vykreslíme je na nových pozicích
+        if draw_boxes:
+            if self.detected_coords.get("price"):
+                self.create_interactive_box(self.detected_coords["price"], "red", "price")
+            if self.detected_coords.get("date"):
+                self.create_interactive_box(self.detected_coords["date"], "blue", "date")
+
+    # --- CANVAS BOX LOGIC ---
+    def create_interactive_box(self, raw_coords, color, type_key):
+        group_tag = f"group_{type_key}"
+        self.canvas.delete(group_tag)
+
+        if raw_coords:
+            xs = [pt[0] for pt in raw_coords]
+            ys = [pt[1] for pt in raw_coords]
+            x1 = min(xs) * self.scale_ratio
+            y1 = min(ys) * self.scale_ratio
+            x2 = max(xs) * self.scale_ratio
+            y2 = max(ys) * self.scale_ratio
         else:
-            # Vlákno skončilo! Můžeme bezpečně aktualizovat GUI.
-            self.finalize_gui_update()
+            # Default na střed obrazovky
+            cw = self.canvas.winfo_width()
+            ch = self.canvas.winfo_height()
+            w, h = 100, 40
+            x1, y1 = (cw/2 - w/2), (ch/2 - h/2)
+            x2, y2 = (cw/2 + w/2), (ch/2 + h/2)
 
-    def _load_image(self, path: str):
+        self.canvas.create_rectangle(x1, y1, x2, y2, outline=color, width=2, tags=(group_tag, "rect", "movable"))
+        self._draw_handle(x1, y1, group_tag, "NW", color)
+        self._draw_handle(x2, y1, group_tag, "NE", color)
+        self._draw_handle(x2, y2, group_tag, "SE", color)
+        self._draw_handle(x1, y2, group_tag, "SW", color)
+
+    def _draw_handle(self, x, y, group_tag, corner, color):
+        size = 6 
+        self.canvas.create_rectangle(
+            x - size, y - size, x + size, y + size,
+            fill=color, outline="white",
+            tags=(group_tag, "handle", f"corner_{corner}", "movable")
+        )
+
+    def add_manual_box(self, type_key, color):
+        if self.original_image:
+            self.create_interactive_box(None, color, type_key)
+        else:
+            self.status_label.configure(text="Load image first.")
+
+    # --- DRAG & DROP LOGIC ---
+    def on_drag_start(self, event):
+        closest = self.canvas.find_closest(event.x, event.y)
+        if not closest: return
+        item_id = closest[0]
+        tags = self.canvas.gettags(item_id)
+        if "movable" not in tags: return
+
+        group_tag = next((t for t in tags if t.startswith("group_")), None)
+        self.drag_data.update({"item": item_id, "x": event.x, "y": event.y, "group_tag": group_tag})
+
+        if "handle" in tags:
+            self.drag_data["mode"] = "RESIZE"
+            self.drag_data["corner"] = next((t.split("_")[1] for t in tags if t.startswith("corner_")), None)
+            self.canvas.configure(cursor="crosshair")
+        else:
+            self.drag_data["mode"] = "MOVE"
+            self.canvas.configure(cursor="fleur")
+
+    def on_drag_motion(self, event):
+        if not self.drag_data["group_tag"]: return
+        dx = event.x - self.drag_data["x"]
+        dy = event.y - self.drag_data["y"]
+        group = self.drag_data["group_tag"]
+
+        if self.drag_data["mode"] == "MOVE":
+            self.canvas.move(group, dx, dy)
+            self.drag_data["x"] = event.x
+            self.drag_data["y"] = event.y
+
+        elif self.drag_data["mode"] == "RESIZE":
+            rect_ids = self.canvas.find_withtag(f"{group}&&rect")
+            if not rect_ids: return
+            x1, y1, x2, y2 = self.canvas.coords(rect_ids[0])
+            corner = self.drag_data["corner"]
+            
+            if corner == "NW": x1, y1 = event.x, event.y
+            elif corner == "NE": x2, y1 = event.x, event.y
+            elif corner == "SE": x2, y2 = event.x, event.y
+            elif corner == "SW": x1, y2 = event.x, event.y
+            
+            nx1, nx2 = min(x1, x2), max(x1, x2)
+            ny1, ny2 = min(y1, y2), max(y1, y2)
+            
+            self.canvas.coords(rect_ids[0], nx1, ny1, nx2, ny2)
+            self._update_handles(group, nx1, ny1, nx2, ny2)
+
+    def _update_handles(self, group, x1, y1, x2, y2):
+        s = 6
+        self.canvas.coords(self.canvas.find_withtag(f"{group}&&corner_NW")[0], x1-s, y1-s, x1+s, y1+s)
+        self.canvas.coords(self.canvas.find_withtag(f"{group}&&corner_NE")[0], x2-s, y1-s, x2+s, y1+s)
+        self.canvas.coords(self.canvas.find_withtag(f"{group}&&corner_SE")[0], x2-s, y2-s, x2+s, y2+s)
+        self.canvas.coords(self.canvas.find_withtag(f"{group}&&corner_SW")[0], x1-s, y2-s, x1+s, y2+s)
+
+    def on_drag_stop(self, event):
+        self.drag_data["item"] = None
+        self.drag_data["group_tag"] = None
+        self.canvas.configure(cursor="")
+
+    # --- FILE & OCR LOGIC ---
+    def open_file_dialog(self):
+        path = filedialog.askopenfilename(filetypes=[("Images", "*.png;*.jpg;*.jpeg"), ("All", "*.*")])
+        if path:
+            self.selected_path = path
+            self.path_label.configure(text=f"Selected: {os.path.basename(path)}")
+            self.process_btn.configure(state="normal")
+            
+            # Load raw image
+            self.detected_coords = {"price": None, "date": None}
+            self.original_image = self._load_image(path) # Save original!
+            self.show_image_on_canvas()
+
+    def _load_image(self, path):
         try:
             img = Image.open(path)
-            try:
-                img = ImageOps.exif_transpose(img)
-            except:
-                pass
+            try: img = ImageOps.exif_transpose(img)
+            except: pass
             return img.convert("RGB")
         except Exception as e:
-            print(f"Chyba při načítání obrázku: {e}")
+            print(f"Error loading: {e}")
             return None
+
+    def start_ocr_process(self):
+        if self.ocr_engine is None: return
+        self.process_btn.configure(state="disabled")
+        self.select_btn.configure(state="disabled")
+        self.progress_bar.pack(pady=10)
+        self.progress_bar.start()
+        self.status_label.configure(text="Running OCR...")
         
-    def _draw_rect(self, img, coords):
-        if self.vybrana_cesta is None or img is None or coords is None: return img
+        self._ocr_thread = threading.Thread(target=self.ocr_thread_logic)
+        self._ocr_thread.start()
+        self.monitor_ocr_thread()
 
+    def ocr_thread_logic(self):
+        if not self.ocr_engine or not self.selected_path: return
         try:
-            draw = ImageDraw.Draw(img) 
-
-            line_width = int(img.size[0] * 0.005)
-            lined_width = max(1, line_width)
-            poly_coords = []
-
-            for point in coords:
-                if isinstance(point, (list, tuple)) and len(point) >= 2:
-                    poly_coords.append((point[0], point[1]))
-                    
-            if len(poly_coords) >= 2:
-                draw.polygon(poly_coords, outline="red", width=lined_width)
-            return img
+            self.ocr_raw_data = self.ocr_engine.analyze_image(self.selected_path)
+            self.detected_coords["price"] = self.ocr_engine.get_price_coords()
+            self.detected_coords["date"] = self.ocr_engine.get_date_coords()
+            price = self.ocr_engine.get_price()
+            self._thread_result_msg = f"Done. Price: {price}"
         except Exception as e:
-            print(f"Chyba při kreslení na obrázek: {e}")
-            return img
-    
-    def _resize_image(self, img, target_width=600):
-        w_percent = (target_width / float(img.size[0]))
-        h_size = int((float(img.size[1]) * float(w_percent)))
-        
-        # Kompatibilita verzí Pillow
-        try:
-            resample_mode = Image.Resampling.BILINEAR
-        except AttributeError:
-            resample_mode = 2 
+            self._thread_result_msg = f"Error: {e}"
 
-        return img.resize((target_width, h_size), resample_mode)
-
-    def thread_ocr_logic(self):
-        actual_path = self.vybrana_cesta
-
-        if actual_path is None: return
-        
-        try:
-            # self.ocr_engine.analyze_image(actual_path)
-            # raw_data = self.ocr_engine.current_data
-            self.ocr_finall_data = self.ocr_engine.analyze_image(actual_path)
-            coords_price = self.ocr_engine.get_price_coords()
-            coords_date = self.ocr_engine.get_date_coords()
-            price_value = self.ocr_engine.get_price()
-
-            current_image = self._load_image(actual_path)
-            if coords_price:
-                current_image = self._draw_rect(current_image, coords_price)
-
-            if coords_date:
-                current_image = self._draw_rect(current_image, coords_date)
-
-            if coords_date or coords_price:
-                self._thread_result_image = self._resize_image(current_image, target_width=600)
-    
-            self._thread_result_msg = f"OCR dokončeno. Cena je: {price_value}"
-        except Exception as e:
-            print(f"Chyba v OCR vlákně: {e}")
-            import traceback
-            traceback.print_exc()
-            self._thread_result_msg = f"Chyba během OCR: {e}"
+    def monitor_ocr_thread(self):
+        if self._ocr_thread and self._ocr_thread.is_alive():
+            self.after(100, self.monitor_ocr_thread)
+        else:
+            self.finalize_gui_update()
 
     def finalize_gui_update(self):
-        """
-        Tato metoda se zavolá v hlavním vlákně, jakmile 'monitor' zjistí, že vlákno skončilo.
-        """
-        # 1. Zobrazit obrázek (pokud byl vytvořen)
-        if self._thread_result_image:
-            self.show_image_preview(self._thread_result_image, resize=False)
-            self._thread_result_image = None # Úklid
-        
-        # 2. Status a Tlačítka
         self.progress_bar.stop()
         self.progress_bar.pack_forget()
-        self.lable_status.configure(text=self._thread_result_msg)
-        
-        self.btn_compile.configure(state="normal", text="Ukončit a Použít data", command=self.ukoncit_aplikaci)
-        self.btn_vybrat.configure(state="normal")
+        self.status_label.configure(text=self._thread_result_msg)
+        # Refresh canvas with new boxes
+        self.show_image_on_canvas(draw_boxes=True)
+        self.process_btn.configure(state="normal", text="Finish", command=self.finalize_and_close)
+        self.select_btn.configure(state="normal")
 
-    def ukoncit_aplikaci(self):
+    def _get_coords_from_canvas(self, type_key):
+        group = f"group_{type_key}"
+        rects = self.canvas.find_withtag(f"{group}&&rect")
+        if not rects: return None
+        x1, y1, x2, y2 = self.canvas.coords(rects[0])
+        
+        # Convert back to original scale
+        if self.scale_ratio > 0:
+            rx1 = int(x1 / self.scale_ratio)
+            ry1 = int(y1 / self.scale_ratio)
+            rx2 = int(x2 / self.scale_ratio)
+            ry2 = int(y2 / self.scale_ratio)
+            return [[rx1, ry1], [rx2, ry1], [rx2, ry2], [rx1, ry2]]
+        return None
+
+    def finalize_and_close(self):
+        new_price = self._get_coords_from_canvas("price")
+        new_date = self._get_coords_from_canvas("date")
+        self.final_output_data = {
+            "price_coords": new_price,
+            "date_coords": new_date,
+            "filepath": self.selected_path
+        }
+        print(f"Final Data: {self.final_output_data}")
         self.destroy()
 
-    def show_image_preview(self, pil_image, resize=True):
-        if pil_image is None:
-            self.image_label.configure(text="Náhled není k dispozici", image=None)
-            self._image_ref = None
-            return
-        
-        try:
-            if resize:
-                # Resize pokud je to surový obrázek z disku
-                frame_width = 500
-                w_percent = (frame_width / float(pil_image.size[0]))
-                h_size = int((float(pil_image.size[1]) * float(w_percent)))
-                img_to_show = pil_image
-                ctk_size = (frame_width, h_size)
-            else:
-                # Už zmenšeno z vlákna
-                img_to_show = pil_image
-                ctk_size = pil_image.size
-
-            ctk_img_obj = ctk.CTkImage(light_image=img_to_show, dark_image=img_to_show, size=ctk_size)
-            
-            self.image_label.configure(image=ctk_img_obj, text="")
-            self._image_ref = ctk_img_obj 
-            
-            self.image_label.update()
-        except Exception as e:
-            print(f"Chyba při zobrazování obrázku: {e}")
-
-
-def vyrobit_okno() -> list | None:
-    app = VyberSouboruApp()
+def create_window():
+    app = FileSelectorApp()
     app.mainloop()
-    return app.ocr_finall_data
+    return app.final_output_data if hasattr(app, 'final_output_data') else None
+
+if __name__ == "__main__":
+    create_window()
