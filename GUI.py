@@ -182,8 +182,8 @@ class VyberSouboruApp(ctk.CTk):
         if actual_path is None: return
         
         try:
-            self.ocr_engine.analyze_image(actual_path)
-            raw_data = self.ocr_engine.current_data
+            # self.ocr_engine.analyze_image(actual_path)
+            # raw_data = self.ocr_engine.current_data
             self.ocr_finall_data = self.ocr_engine.analyze_image(actual_path)
             coords_price = self.ocr_engine.get_price_coords()
             coords_date = self.ocr_engine.get_date_coords()

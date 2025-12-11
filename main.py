@@ -14,6 +14,9 @@ def main():
         date_coords = ReturnDateCoords(res)
         print(f"Souřadnice data: {date_coords}")
 
+        date_value = ReturnDate(res)
+        print(f"Nalezené datum: {date_value}")
+
 
         print(f"Souřadnice nalezené ceny: {coords}")
         print(f"Získaná data: {final_txt}")

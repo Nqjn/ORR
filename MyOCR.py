@@ -5,28 +5,33 @@ import re
 from typing import List, Tuple, Any, Optional
 
 class MyOCR:
+    _reader = None
     def __init__(self):
-        print("Inicializace OCR modelu...")
-        self.reader = easyocr.Reader(['en', 'cs'], gpu=True)
+        if MyOCR._reader is None:
+            print("Inicializace OCR modelu...")
+            MyOCR._reader = easyocr.Reader(['en', 'cs'], gpu=True)
+        self.reader = MyOCR._reader
         self.current_data: Optional[List[Any]] = None
         self.current_image_path = None
 
     def analyze_image(self, path: str):
+        if not os.path.exists(path):
+            print(f"Soubor neexistuje: {path}")
+            return None
+        
         self.current_image_path = path
         
-        # 1. Preprocessing
-        _ , suffix = os.path.splitext(path)
-        is_jpg = suffix.lower() in ['.jpg', '.jpeg']
-        path_to_ocr = path
-
+        # 1. Preprocess Image if needed
         try:
-            # Create temp converted file if needed
-            if is_jpg:
-                img = Image.open(path)
-                img = ImageOps.exif_transpose(img)
+            img  = Image.open(path)
+            ig = ImageOps.exif_transpose(img)
+
+            if img.format != 'PNG':
                 new_path = os.path.splitext(path)[0] + "_converted.png"
-                img.save(new_path, format="PNG")
+                img.save(new_path, format='PNG')
                 path_to_ocr = new_path
+            else:
+                path_to_ocr = path
         except Exception as e:
             print(f"Chyba při přípravě obrázku: {e}")
             return None
@@ -55,6 +60,8 @@ class MyOCR:
     def get_date_coords(self):
         return ReturnDateCoords(self.current_data)
 
+    def get_date(self):
+        return ReturnDate(self.current_data)
 
 # ==========================================
 # STANDALONE HELPER FUNCTIONS (Logic Only)
@@ -101,6 +108,8 @@ def ReturnDateCoords(data):
     """Parses the raw OCR list to find date coordinates."""
     if not data:
         return None
+    
+    print(_make_string(data))
 
     found_raw_coords = None
     
@@ -119,7 +128,7 @@ def ReturnDateCoords(data):
     for i, res in enumerate(data):
         txt_original = res[1]
         if not isinstance(txt_original, str): continue
-        txt_lowered = txt_original.lower()
+
 
         for pat in patterns:
             if re.search(pat, txt_original):
@@ -128,33 +137,61 @@ def ReturnDateCoords(data):
             
     
             
-    if any (k in txt_lowered for k in keywords):
-            print(f"Date Keyword Match: {txt_original}")
+    # if any (k in txt_lowered for k in keywords):
+    #         print(f"Date Keyword Match: {txt_original}")
             
-            merged_text = ' '
-            involved_boxes = []
+    #         merged_text = ' '
+    #         involved_boxes = []
 
-            search_depth = 3
+    #         search_depth = 3
             
-            for offset in range(0, search_depth):
-                current_index = i + offset
-                if current_index < len(data): break
+    #         for offset in range(0, search_depth):
+    #             current_index = i + offset
+    #             if current_index < len(data): break
 
-                item = data[current_index]
-                text = item[1]
-                box = item[0]
+    #             item = data[current_index]
+    #             text = item[1]
+    #             box = item[0]
 
-                if not isinstance(text, str): continue
+    #             if not isinstance(text, str): continue
 
-                merged_text += text + ' '
-                involved_boxes.append(box)
+    #             merged_text += text + ' '
+    #             involved_boxes.append(box)
 
-                for pat in patterns:
-                    if re.search(pat, merged_text):
-                        print(f"Date Merged Match: {merged_text}")
-                        union_box = _get_union_coords(involved_boxes)
-                        return _clean_coords_helper(union_box)
+    #             for pat in patterns:
+    #                 if re.search(pat, merged_text):
+    #                     print(f"Date Merged Match: {merged_text}")
+    #                     union_box = _get_union_coords(involved_boxes)
+    #                     return _clean_coords_helper(union_box)
+
     return None
+
+def ReturnDate(data):
+    """Parses the raw OCR list to find date value."""
+    if not data:
+        return None
+    
+    patterns = [
+        r"\b\d{1,2}\s*[.,]\s*\d{1,2}\s*[.,]\s*\d{2,4}", # DD.MM.YYYY
+        r"\b\d{1,2}\s*[\-/]\s*\d{1,2}\s*[\-/]\s*\d{2,4}", # DD-MM-YYYY
+        r"\b\d{4}\s*[.\-/]\s*\d{1,2}\s*[.\-/]\s*\d{1,2}", # YYYY-MM-DD
+        r"\b\d{1,2}\s+\d{1,2}\s+\d{4}" # Spaced
+    ]
+
+    text_data = _make_string(data)
+    for pat in patterns:
+        match = re.search(pat, text_data)
+        if match:
+            return match.group(0)
+        
+    return None
+
+def _make_string(data):
+    """Internal helper to concatenate all recognized text."""
+    if not data:
+        return ""
+    texts = [res[1] for res in data if isinstance(res[1], str)]
+    return '.'.join(texts)
 
 
              
