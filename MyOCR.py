@@ -6,18 +6,35 @@ import numpy as np
 from typing import List, Tuple, Any, Optional
 
 class MyOCR:
+    """
+    Wrapper class for EasyOCR with additional functionalities.
+    
+    Attributes:
+        reader (easyocr.Reader): The EasyOCR reader instance.
+        current_data (list): The last OCR result data.
+        current_image_path (str): The path of the last processed image.
+    """
     _reader = None
+
     def __init__(self):
         if MyOCR._reader is None:
             print("Inicializace OCR modelu...")
             MyOCR._reader = easyocr.Reader(['en', 'cs'], gpu=True)
+
+
         self.reader = MyOCR._reader
         self.current_data: Optional[List[Any]] = None
         self.current_image_path = None
 
     def analyze_image(self, path: str):
+        """
+        Analyzes the image at the given path and performs OCR.
+        Args:
+            path (str): Path to the image file.
+        Returns:
+            List[Any] | None: OCR result data."""
         if not os.path.exists(path):
-            print(f"Soubor neexistuje: {path}")
+            print(f"(-)File does not exist: {path}")
             return None
         
         self.current_image_path = path
@@ -34,10 +51,10 @@ class MyOCR:
             else:
                 path_to_ocr = path
         except Exception as e:
-            print(f"Chyba při přípravě obrázku: {e}")
+            print(f"(-)Error while preparing image: {e}")
             return None
 
-        print(f"Zpracovávám OCR pro soubor: {path}")
+        print(f"Processing OCR for file: {path}")
         
         # 2. Run OCR
         try:
@@ -46,6 +63,7 @@ class MyOCR:
             print(f"Chyba při čtení textu: {e}")
             self.current_data = None
         finally:
+            # 3. Clean up temporary file if created
             if path_to_ocr != path and os.path.exists(path_to_ocr):
                 os.remove(path_to_ocr)
 
@@ -56,23 +74,23 @@ class MyOCR:
         Provede OCR pouze na vybraném výřezu obrázku definovaném souřadnicemi.
         
         Args:
-            path (str): Cesta k souboru s obrázkem.
-            coords (list): Seznam bodů [[x1, y1], [x2, y1], [x2, y2], [x1, y2]] 
-                           nebo jen bounding box.
+            path (str): Path to the image file.
+            coords (list): List of points [[x1, y1], [x2, y1], [x2, y2], [x1, y2]] 
+                           or just a bounding box.
         
         Returns:
-            str: Nalezený text spojený do jednoho řetězce.
+            str: Found text joined into a single string.
         """
         if not os.path.exists(path):
-            return "Chyba: Soubor neexistuje."
+            return "(-)File does not exist."
 
         try:
-            # 1. Načtení a příprava obrázku
+            # 1. Load Image
             img = Image.open(path)
-            img = ImageOps.exif_transpose(img) # Otočení podle EXIF dat
+            img = ImageOps.exif_transpose(img) # Rotate according to EXIF data
             
-            # 2. Výpočet Bounding Boxu (min_x, min_y, max_x, max_y)
-            # Tím zajistíme, že to funguje, ať už pošlete 4 body (polygon) nebo 2 body
+            # 2. Calculate Bounding Box (min_x, min_y, max_x, max_y)
+            # This ensures it works whether you send 4 points (polygon) or just 2 points (bounding box)
             xs = [point[0] for point in coords]
             ys = [point[1] for point in coords]
             
@@ -81,37 +99,41 @@ class MyOCR:
             max_x = min(img.width, max(xs))
             max_y = min(img.height, max(ys))
 
-            # Pokud je výběr příliš malý (např. omylem kliknuto), vrátíme prázdno
+            # If selection is too small (e.g., accidentally clicked), return empty
             if (max_x - min_x) < 5 or (max_y - min_y) < 5:
                 return ""
 
-            # 3. Oříznutí obrázku (Crop)
+            # 3. Crop Image to the defined region
             cropped_img = img.crop((min_x, min_y, max_x, max_y))
 
-            # 4. Konverze pro EasyOCR (PIL -> Numpy Array)
+            # 4. Convert for EasyOCR (PIL -> Numpy Array)
             img_np = np.array(cropped_img)
 
-            # 5. Spuštění OCR na výřezu
-            # detail=0 vrátí rovnou seznam stringů bez souřadnic a confidence score
+            # 5. Run OCR on the cropped image
+            # detail=0 returns a list of strings without coordinates and confidence score
             results = self.reader.readtext(img_np, detail=0)
             
-            # Spojíme nalezené řádky do jednoho textu
+            # Join found lines into a single text
             return " ".join([str(x) for x in results])
         except Exception as e:
-            print(f"Chyba při OCR výřezu: {e}")
+            print(f"Error during OCR on the cropped region: {e}")
             return ""
 
     # --- Methods that use the Standalone Functions below ---
     def get_price(self):
+        """Returns the price value from the current OCR data."""
         return ReturnPrice(self.current_data)
-
+    
     def get_price_coords(self):
+        """Returns the price coordinates from the current OCR data."""
         return ReturnPriceCoords(self.current_data)
 
     def get_date_coords(self):
+        """Returns the date coordinates from the current OCR data."""
         return ReturnDateCoords(self.current_data)
 
     def get_date(self):
+        """Returns the date value from the current OCR data."""
         return ReturnDate(self.current_data)
 
 # ==========================================

@@ -36,7 +36,7 @@ def main():
 
         # 4. Generate Excel
         # Make sure you have a file named 'template.xlsx' in your folder!
-        template_file = "template.xlsx" 
+        template_file = "template.xls" 
         
         # Create output filename (e.g., "Invoice_originalName.xlsx")
         output_filename = f"Invoice_{os.path.splitext(os.path.basename(filepath))[0]}.xlsx"

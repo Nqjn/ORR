@@ -6,48 +6,48 @@ class ExcelHandler:
         self.template_path = template_path
 
     def create_invoice(self, output_path, data_dict):
-        # 1. Kontrola existence souboru
+        # 1. Check if the template file exists
         if not os.path.exists(self.template_path):
-            print(f"CHYBA: Šablona nebyla nalezena: {self.template_path}")
+            print(f"(-)ERROR: Template not found: {self.template_path}")
             return False
 
         try:
-            # Načtení sešitu
+            # Load the workbook
             wb = openpyxl.load_workbook(self.template_path)
             
-            # 2. Výběr konkrétního listu podle jména
+            # 2. Select the specific sheet by name
             target_sheet_name = "Příjmy a výdaje"
             
             if target_sheet_name in wb.sheetnames:
                 ws = wb[target_sheet_name]
             else:
-                print(f"CHYBA: List '{target_sheet_name}' v šabloně neexistuje.")
-                print(f"Dostupné listy: {wb.sheetnames}")
+                print(f"(-)ERROR: Sheet '{target_sheet_name}' does not exist in the template.")
+                print(f"Available sheets: {wb.sheetnames}")
                 return False
             
-            # --- ZÁPIS DAT ---
-            # Zde si upravte souřadnice buněk podle vašeho Excelu (např. C50, D50...)
+            # --- WRITE DATA ---
+            # Adjust the cell coordinates according to your Excel (e.g., C50, D50...)
             
-            # Příklad: Cena
+            # Example: Price
             if data_dict.get('price'):
                 try:
-                    # Pokus o převod na číslo (odstranění mezer, Kč atd.)
+                    # Attempt to convert to a number (remove spaces, Kč, etc.)
                     clean_price = str(data_dict['price']).replace(" ", "").replace("Kč", "").replace(",", ".")
-                    # Zde zadejte buňku, kam má přijít cena (např. C50 podle vašeho obrázku?)
+                    # Specify the cell for the price (e.g., C50 according to your image?)
                     ws['C79'] = float(clean_price) 
                 except ValueError:
                     ws['C79'] = data_dict['price']
 
-            # Příklad: Datum
+            # Example: Date
             if data_dict.get('date'):
-                # Zde zadejte buňku pro datum
+                # Specify the cell for the date
                 ws['E79'] = data_dict['date']
 
-            # Příklad: Název souboru / Poznámka
+            # Example: Filename / Note
             if data_dict.get('filename'):
-                ws['F79'] = data_dict['filename'] # Např. sloupec Poznámka
+                ws['F79'] = data_dict['filename'] # For example, the Note column
                 
-            # 3. Uložení
+            # 3. Save the modified workbook
             wb.save(output_path)
             print(f"Excel úspěšně vytvořen: {output_path}")
             return True

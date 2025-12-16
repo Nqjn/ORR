@@ -6,7 +6,7 @@ from PIL import Image, ImageOps, ImageTk
 import threading
 from typing import Any, List, Optional
 
-# --- IMPORT VLASTNÍHO OCR ---
+# --- IMPORT MyOCR ---
 try:
     from MyOCR import MyOCR, ReturnPriceCoords, ReturnPrice
 except ImportError:
@@ -23,13 +23,13 @@ class FileSelectorApp(ctk.CTk):
         self.selected_path = None
         self.ocr_raw_data = None 
         
-        # Zde budeme držet originální PIL obrázek pro opakované zmenšování
+        # Here we will keep the original PIL image for repeated resizing
         self.original_image = None 
-        self._tk_image_ref = None # Reference pro tkinter (aby ji nesmazal GC)
+        self._tk_image_ref = None # Reference for tkinter (to prevent it from being garbage collected)
         
         self.scale_ratio = 1.0
         
-        # Drag & Drop proměnné
+        # Drag & Drop variables
         self.drag_data = {
             "x": 0, "y": 0, 
             "item": None,
@@ -50,7 +50,7 @@ class FileSelectorApp(ctk.CTk):
         self.title("OCR - File Selection (Responsive)")
         self.geometry("1200x800")
 
-        # Inicializace OCR
+        # Inicializing OCR
         self.ocr_engine = None
         try:
             self.ocr_engine = MyOCR()
@@ -100,58 +100,69 @@ class FileSelectorApp(ctk.CTk):
         
         # Placeholder text
         self.text_id = self.canvas.create_text(
-            400, 300, text="Image Preview", fill="gray", font=("Arial", 16)
+            0, 0,
+            text="Image Preview",
+            fill="gray",
+            font=("Arial", 16),
+            anchor="center"
         )
+
+        self.canvas.bind("<Configure>", self._center_placeholder_position)
+
+    def _center_placeholder_position(self, event):
+        canvas_width = self.canvas.winfo_width()
+        canvas_height = self.canvas.winfo_height()
+        self.canvas.coords(self.text_id, canvas_width / 2, canvas_height / 2)
 
         # === BINDING EVENTS ===
         self.canvas.bind("<Button-1>", self.on_drag_start)
         self.canvas.bind("<B1-Motion>", self.on_drag_motion)
         self.canvas.bind("<ButtonRelease-1>", self.on_drag_stop)
         
-        # DŮLEŽITÉ: Bindování změny velikosti okna
+        # IMPORTANT: Binding window resize event
         self.canvas.bind("<Configure>", self.on_resize)
 
     # --- RESIZING LOGIC ---
     def on_resize(self, event):
-        """Volá se automaticky, když se změní velikost okna/canvasu."""
+        """Calls automatically when the window/canvas size changes."""
         if self.original_image:
-            # Překreslíme obrázek podle nové velikosti canvasu
+            # Redraw the image according to the new canvas size
             self.show_image_on_canvas(draw_boxes=True)
 
     def show_image_on_canvas(self, draw_boxes=False):
         """Vypočítá novou velikost a vykreslí obrázek i boxy."""
         if self.original_image is None: return
 
-        # Zjistíme aktuální rozměry canvasu
+        # Finding current canvas dimensions
         canvas_width = self.canvas.winfo_width()
         canvas_height = self.canvas.winfo_height()
         
-        # Pokud je canvas příliš malý (např. při startu), nic neděláme
+        # If the canvas is too small (e.g., at startup), do nothing
         if canvas_width < 10 or canvas_height < 10: return
 
         self.canvas.delete("all")
 
-        # --- MATEMATIKA FIT-TO-WINDOW ---
+        # --- MATH FIT-TO-WINDOW ---
         img_w, img_h = self.original_image.size
         
-        # Spočítáme poměry
+        # Calculate ratios
         ratio_w = canvas_width / img_w
         ratio_h = canvas_height / img_h
         
-        # Vybereme menší poměr -> obrázek se vejde celý (contain)
+        # Choose the smaller ratio -> the image will fit entirely (contain)
         self.scale_ratio = min(ratio_w, ratio_h)
         
         new_w = int(img_w * self.scale_ratio)
         new_h = int(img_h * self.scale_ratio)
 
-        # Změníme velikost obrázku (používáme originál jako zdroj!)
+        # Resize the image (using the original as the source!)
         resized_pil = self.original_image.resize((new_w, new_h), Image.Resampling.BILINEAR)
         self._tk_image_ref = ImageTk.PhotoImage(resized_pil)
 
-        # Vykreslíme (zarovnáno vlevo nahoře 0,0 - nejjednodušší pro souřadnice)
+        # Draw the image (aligned top-left 0,0 - simplest for coordinates)
         self.canvas.create_image(0, 0, image=self._tk_image_ref, anchor="nw")
 
-        # Pokud máme zapnuté boxy, vykreslíme je na nových pozicích
+        # If boxes are enabled, draw them at new positions
         if draw_boxes:
             if self.detected_coords.get("price"):
                 self.create_interactive_box(self.detected_coords["price"], "red", "price")
@@ -171,7 +182,7 @@ class FileSelectorApp(ctk.CTk):
             x2 = max(xs) * self.scale_ratio
             y2 = max(ys) * self.scale_ratio
         else:
-            # Default na střed obrazovky
+            # Default to center of the screen
             cw = self.canvas.winfo_width()
             ch = self.canvas.winfo_height()
             w, h = 100, 40
@@ -269,7 +280,7 @@ class FileSelectorApp(ctk.CTk):
             self.detected_coords = {"price": None, "date": None}
             self.original_image = self._load_image(path) # Save original!
             self.show_image_on_canvas()
-
+    
     def _load_image(self, path):
         try:
             img = Image.open(path)
