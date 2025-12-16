@@ -1,51 +1,66 @@
 from GUI import create_window
-from MyOCR import MyOCR
 from ExcelHandler import ExcelHandler
 import os
 
+# Import s ochranou (stejně jako v GUI)
+try:
+    from MyOCR import MyOCR
+except ImportError:
+    print("WARNING: MyOCR nebylo nalezeno.")
+    MyOCR = None 
+
 def main():
-    # 1. Run GUI to select file and coords
-    gui_data = create_window()
+    # 1. Spustíme GUI (vrací seznam souborů)
+    gui_data_list = create_window()
 
-    if gui_data:
-        print("\n--- PROCESSING DATA ---")
-        filepath = gui_data['filepath']
+    if gui_data_list:
+        print(f"\n--- ZPRACOVÁVÁM {len(gui_data_list)} SOUBORŮ ---")
         
-        # 2. Extract text using OCR on specific regions
-        ocr_engine = MyOCR()
+        # 2. Inicializujeme OCR engine
+        ocr_engine = None
+        if MyOCR:
+            ocr_engine = MyOCR()
         
-        final_price = None
-        final_date = None
-
-        # Get Price Text
-        if gui_data.get('price_coords'):
-            final_price = ocr_engine.get_text_from_region(filepath, gui_data['price_coords'])
-            print(f"Price Found: {final_price}")
-        
-        # Get Date Text
-        if gui_data.get('date_coords'):
-            final_date = ocr_engine.get_text_from_region(filepath, gui_data['date_coords'])
-            print(f"Date Found: {final_date}")
-
-        # 3. Prepare Data for Excel
-        excel_data = {
-            'price': final_price,
-            'date': final_date,
-            'filename': os.path.basename(filepath)
-        }
-
-        # 4. Generate Excel
-        # Make sure you have a file named 'template.xlsx' in your folder!
-        template_file = "template.xls" 
-        
-        # Create output filename (e.g., "Invoice_originalName.xlsx")
-        output_filename = f"Invoice_{os.path.splitext(os.path.basename(filepath))[0]}.xlsx"
+        template_file = "template.xlsx"
+        final_output_file = "Vysledny_export.xlsx"
         
         handler = ExcelHandler(template_file)
-        handler.create_invoice(output_filename, excel_data)
+
+        # 3. Cyklus přes všechny obrázky
+        for item in gui_data_list:
+            filepath = item['filepath']
+            filename = os.path.basename(filepath)
+            print(f"\nProcessing: {filename}")
+
+            final_price = None
+            final_date = None
+
+            # Získání textu pomocí OCR
+            if ocr_engine:
+                if item.get('price_coords'):
+                    final_price = ocr_engine.get_text_from_region(filepath, item['price_coords'])
+                    print(f"  -> Cena text: {final_price}")
+                
+                if item.get('date_coords'):
+                    final_date = ocr_engine.get_text_from_region(filepath, item['date_coords'])
+                    print(f"  -> Datum text: {final_date}")
+            else:
+                print("  -> OCR engine není dostupný.")
+
+            # 4. Příprava dat
+            excel_data = {
+                'price': final_price,
+                'date': final_date,
+                'filename': filename
+            }
+
+            # 5. Zápis do Excelu (s formátováním)
+            handler.add_invoice_entry(final_output_file, excel_data)
+
+        print("\n--- HOTOVO ---")
 
     else:
-        print("No data selected.")
+        print("Operace zrušena.")
 
 if __name__ == "__main__":
     main()
