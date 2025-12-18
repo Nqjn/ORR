@@ -40,7 +40,7 @@ def main():
 
         # 2. Přidáme prodejce do slovníku pro Excel
         excel_data = {
-            'vendor': vendor,  # <--- TOTO JE KLÍČOVÉ PRO EXCELHANDLER
+            'vendor': vendor,  
             'price': price,
             'date': date,
             'filename': filename
