@@ -2,20 +2,17 @@ import openpyxl
 import os
 from datetime import datetime
 import re
-# NEW: Import Cell to fix the Pylance "MergedCell" error
-from openpyxl.cell.cell import Cell 
+from openpyxl.cell.cell import Cell, MergedCell
 
 class ExcelHandler:
     def __init__(self, template_path):
         self.template_path = template_path
 
     def _clean_price(self, price_text):
-        """Vyčistí cenu na float. Zvládne '1 200,50 Kč', '1.200', atd."""
+        """Převede text na číslo (float)."""
         if not price_text: return 0.0
         text = str(price_text).strip()
-        # Odstranit měnu a mezery
         text = text.replace("Kč", "").replace("EUR", "").replace("€", "").replace(" ", "")
-        # Čárky na tečky
         text = text.replace(",", ".")
         try:
             return float(text)
@@ -23,32 +20,44 @@ class ExcelHandler:
             return 0.0
 
     def _parse_date(self, date_text):
-        """
-        Najde datum pomocí Regexu. 
-        Opraví chyby jako ':2.3.2017' nebo '07,05,17' nebo čas navíc.
-        """
+        """Najde datum v textu."""
         if not date_text: return None
         text = str(date_text).strip()
-        # Nahradit čárky tečkami (častá chyba OCR)
-        text = text.replace(",", ".")
-        
-        # Regex: Hledá D.M.RRRR nebo D.M.RR (např. 1.2.2023)
-        # Ignoruje vše okolo (dvojtečky, čas atd.)
+        text = text.replace(",", ".") # Oprava časté chyby OCR
         match = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{2,4})", text)
-        
         if match:
             d, m, y = match.groups()
-            # Oprava roku na 4 místa (17 -> 2017)
             if len(y) == 2: y = "20" + y 
-            
             try:
                 return datetime.strptime(f"{d}.{m}.{y}", "%d.%m.%Y")
             except ValueError: 
                 pass
         return None
 
+    def _get_writable_cell(self, ws, row, col):
+        """
+        Klíčová oprava: Pokud je buňka sloučená (MergedCell),
+        najde tu hlavní (vlevo nahoře), do které se dá psát.
+        """
+        cell = ws.cell(row=row, column=col)
+        
+        # Pokud je to normální buňka, vrátíme ji
+        if isinstance(cell, Cell):
+            return cell
+        
+        # Pokud je sloučená, najdeme tu hlavní
+        if isinstance(cell, MergedCell):
+            for merged_range in ws.merged_cells.ranges:
+                if cell.coordinate in merged_range:
+                    return ws.cell(row=merged_range.min_row, column=merged_range.min_col)
+        
+        return cell
+
     def add_invoice_entry(self, output_path, data_dict):
-        # 1. Načtení sešitu
+        print("-" * 50)
+        print(f"DEBUG: Zpracovávám data pro Excel...")
+        
+        # 1. Načtení šablony nebo existujícího souboru
         file_to_load = self.template_path
         if os.path.exists(output_path):
             file_to_load = output_path
@@ -59,74 +68,98 @@ class ExcelHandler:
         try:
             wb = openpyxl.load_workbook(file_to_load)
             
-            # 2. Výběr listu (Bezpečně)
+            # 2. Výběr listu
             sheet_name = "Příjmy a výdaje"
-            ws = None
-            if sheet_name in wb.sheetnames:
-                ws = wb[sheet_name]
-            else:
-                ws = wb.active # Fallback
-
-            # Ochrana: Pokud se list nenačetl, skončíme
+            ws = wb[sheet_name] if sheet_name in wb.sheetnames else wb.active
+            
             if ws is None:
-                print("(!) CHYBA: Excel nemá žádný aktivní list.")
+                print("(!) CHYBA: List nebyl nalezen.")
                 return False
 
             # 3. Hledání prvního volného řádku
+            # (hledáme podle sloupce 3 - Cena)
             row = 79
-            # Použijeme cyklus s ochranou
-            while True:
-                # cell(row, col) vrací objekt buňky. .value je hodnota.
-                val = ws.cell(row=row, column=3).value
-                if val is None:
+            max_search = 5000
+            counter = 0
+            
+            while counter < max_search:
+                cell = self._get_writable_cell(ws, row, 3)
+                if cell.value is None:
                     break
                 row += 1
+                counter += 1
             
             print(f"   (Zapisuji na řádek {row})")
 
-            # 4. Zápis dat
-            
-            # -- CENA (Sloupec 3) --
-            if data_dict.get('price'):
-                val_price = self._clean_price(data_dict['price'])
-                c_cell = ws.cell(row=row, column=3)
-                
-                # FIX: Ověříme, že buňka není MergedCell (sloučená), jinak Pylance hlásí chybu
-                if isinstance(c_cell, Cell):
-                    c_cell.value = val_price
-                    c_cell.number_format = '#,##0.00 "Kč"'
-                else:
-                    print(f"(!) POZOR: Buňka {row},3 je sloučená. Nelze zapsat cenu.")
+            # 4. Zápis dat (pomocí _get_writable_cell + type: ignore pro potlačení chyb editoru)
 
-            # -- DATUM (Sloupec 5) --
-            if data_dict.get('date'):
-                val_date = self._parse_date(data_dict['date'])
-                e_cell = ws.cell(row=row, column=5)
-                
-                # FIX: Ověříme typ buňky
-                if isinstance(e_cell, Cell):
-                    if val_date:
-                        e_cell.value = val_date
-                        e_cell.number_format = 'd.m.yyyy'
-                    else:
-                        # Pokud převod selhal, zapíšeme text
-                        e_cell.value = str(data_dict['date'])
-                else:
-                    print(f"(!) POZOR: Buňka {row},5 je sloučená. Nelze zapsat datum.")
+            # -- PRODEJCE (Sloupec 2 / B) --
+            vendor_val = data_dict.get('vendor') or data_dict.get('vendor_text')
+            if vendor_val:
+                cell = self._get_writable_cell(ws, row, 2)
+                cell.value = str(vendor_val) # type: ignore
+            else:
+                print("(!) VAROVÁNÍ: Klíč 'vendor' je prázdný!")
 
-            # -- NÁZEV SOUBORU (Sloupec 6) --
+            # -- CENA (Sloupec 3 / C) --
+            price_val = data_dict.get('price') or data_dict.get('price_text')
+            if price_val:
+                cell = self._get_writable_cell(ws, row, 3)
+                cell.value = self._clean_price(price_val) # type: ignore
+                cell.number_format = '#,##0.00 "Kč"'
+
+            # -- DATUM (Sloupec 5 / E) --
+            date_val = data_dict.get('date') or data_dict.get('date_text')
+            if date_val:
+                cell = self._get_writable_cell(ws, row, 5)
+                val_parsed = self._parse_date(date_val)
+                if val_parsed:
+                    cell.value = val_parsed # type: ignore
+                    cell.number_format = 'd.m.yyyy'
+                else:
+                    cell.value = str(date_val) # type: ignore
+
+            # -- FILENAME (Sloupec 6 / F) --
             if data_dict.get('filename'):
-                f_cell = ws.cell(row=row, column=6)
-                if isinstance(f_cell, Cell):
-                    f_cell.value = data_dict['filename']
+                cell = self._get_writable_cell(ws, row, 6)
+                cell.value = data_dict['filename'] # type: ignore
 
             # 5. Uložení
             wb.save(output_path)
+            print(f"OK: Uloženo do '{output_path}'")
             return True
 
         except PermissionError:
-            print(f"(!) CHYBA: Soubor '{output_path}' je otevřený! Zavřete Excel.")
+            print(f"(!) CHYBA: Soubor '{output_path}' je otevřený v Excelu! Zavřete jej.")
             return False
         except Exception as e:
-            print(f"(!) CHYBA ExcelHandler: {e}")
+            print(f"(!) CHYBA: {e}")
             return False
+
+# ==========================================
+# HLAVNÍ ČÁST - TOTO SPUSTÍTE PRO TEST
+# ==========================================
+if __name__ == "__main__":
+    # Nastavení cest
+    sablona = "template.xlsx"
+    vystup = "vysledek_test.xlsx"
+
+    # Vytvoření instance
+    handler = ExcelHandler(sablona)
+
+    # Testovací data - ZDE SI OVĚŘÍTE, JESTLI FUNGUJE ZÁPIS PRODEJCE
+    testovaci_data = {
+        'vendor': 'TEST_PRODEJCE_OK',  # <-- Toto se musí objevit v Excelu
+        'price': '1500,00',
+        'date': '18.12.2025',
+        'filename': 'test_soubor.jpg'
+    }
+
+    print(f"--- Spouštím test s šablonou: {sablona} ---")
+    
+    # Spuštění
+    if os.path.exists(sablona):
+        handler.add_invoice_entry(vystup, testovaci_data)
+        print(f"\nPokud vidíte 'OK', otevřete soubor '{vystup}' a zkontrolujte řádek 79+.")
+    else:
+        print(f"(!) Soubor '{sablona}' v této složce neexistuje. Ujistěte se, že je název správně.")

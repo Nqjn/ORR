@@ -29,7 +29,7 @@ class FileSelectorApp(ctk.CTk):
         self.scale_ratio = 1.0
         
         # Uchováváme reference na widgety (aby šly mazat a číst)
-        self.active_widgets = {} # { "price": {"entry": widget, "frame": widget}, ... }
+        self.active_widgets = {} # { "price": {...}, "date": {...}, "vendor": {...} }
         
         self.drag_data = {
             "x": 0, "y": 0, "item": None, "mode": None, "group_tag": None, "corner": None
@@ -88,10 +88,15 @@ class FileSelectorApp(ctk.CTk):
         self.frame_manual = ctk.CTkFrame(self.control_frame)
         self.frame_manual.pack(pady=20, fill="x", padx=5)
         ctk.CTkLabel(self.frame_manual, text="Přidat oblast:", font=("Arial", 12, "bold")).pack(pady=5)
+        
+        # TLAČÍTKA PRO PŘIDÁNÍ OBLASTÍ
         ctk.CTkButton(self.frame_manual, text="+ Cena", fg_color="red", 
                       command=lambda: self.add_manual_box("price", "red")).pack(pady=5, padx=5, fill="x")
         ctk.CTkButton(self.frame_manual, text="+ Datum", fg_color="blue", 
                       command=lambda: self.add_manual_box("date", "blue")).pack(pady=5, padx=5, fill="x")
+        # NOVÉ TLAČÍTKO PRO PRODEJCE
+        ctk.CTkButton(self.frame_manual, text="+ Název (Prodejce)", fg_color="green", 
+                      command=lambda: self.add_manual_box("vendor", "green")).pack(pady=5, padx=5, fill="x")
 
         self.finish_all_btn = ctk.CTkButton(self.control_frame, text="Uložit vše do Excelu", command=self.finalize_and_close, fg_color="darkblue")
         self.finish_all_btn.pack(side="bottom", pady=20)
@@ -140,17 +145,23 @@ class FileSelectorApp(ctk.CTk):
         if self.current_index >= 0:
             data = self.images_data[self.current_index]
             
-            # Cena
+            # --- CENA (RED) ---
             if data["coords"].get("price"):
                 self.create_interactive_box(data["coords"]["price"], "red", "price")
                 val = data["final_values"].get("price")
                 self.create_text_entry("price", data["coords"]["price"], val, "red")
 
-            # Datum
+            # --- DATUM (BLUE) ---
             if data["coords"].get("date"):
                 self.create_interactive_box(data["coords"]["date"], "blue", "date")
                 val = data["final_values"].get("date")
                 self.create_text_entry("date", data["coords"]["date"], val, "blue")
+
+            # --- PRODEJCE (GREEN) ---
+            if data["coords"].get("vendor"):
+                self.create_interactive_box(data["coords"]["vendor"], "green", "vendor")
+                val = data["final_values"].get("vendor")
+                self.create_text_entry("vendor", data["coords"]["vendor"], val, "green")
 
     def create_text_entry(self, type_key, coords, text_value, color):
         if not coords: return
@@ -211,17 +222,13 @@ class FileSelectorApp(ctk.CTk):
             cw, ch = self.canvas.winfo_width(), self.canvas.winfo_height()
             x1, y1, x2, y2 = cw/2 - 50, ch/2 - 20, cw/2 + 50, ch/2 + 20
 
-        # Poznámka: fill="" znamená průhledný, ale pro Tkinter je to 'nic'.
-        # Proto musíme detekci kliknutí dělat matematicky v _get_target_at_position.
         self.canvas.create_rectangle(x1, y1, x2, y2, outline=color, width=2, tags=(group_tag, "rect", "movable"))
-        
         for corner in ["NW", "NE", "SE", "SW"]:
             self._draw_handle(x1, y1, x2, y2, group_tag, corner, color)
 
     def _draw_handle(self, x1, y1, x2, y2, group_tag, corner, color):
         size = 6
         cx, cy = {"NW":(x1,y1), "NE":(x2,y1), "SE":(x2,y2), "SW":(x1,y2)}[corner]
-        # Handle má fill, takže na něj jde kliknout přímo
         self.canvas.create_rectangle(cx-size, cy-size, cx+size, cy+size, fill=color, outline="white", 
                                      tags=(group_tag, "handle", f"corner_{corner}", "movable"))
 
@@ -235,17 +242,9 @@ class FileSelectorApp(ctk.CTk):
         else:
             self.status_label.configure(text="Nejprve nahrajte obrázek.")
 
-    # --- INTERAKCE (UPRAVENO PRO KLIKNUTÍ DOVNITŘ) ---
-
+    # --- INTERAKCE (S OPRAVOU KLIKNUTÍ DOVNITŘ) ---
     def _get_target_at_position(self, x, y, threshold=10):
-        """
-        Zistí, co je pod myší.
-        Priorita: 1. Roh (změna velikosti), 2. Vnitřek obdélníku (posun).
-        Vrací tuple: (group_tag, mode, corner_name)
-        """
-        
-        # 1. Kontrola rohů (Handles) - ty mají fill, takže je find_closest najde dobře
-        # Použijeme find_overlapping pro přesnější detekci bodu
+        # 1. Rohy (resize)
         items = self.canvas.find_overlapping(x-threshold, y-threshold, x+threshold, y+threshold)
         for item in items:
             tags = self.canvas.gettags(item)
@@ -255,45 +254,29 @@ class FileSelectorApp(ctk.CTk):
                 if group and corner:
                     return group, "RESIZE", corner
 
-        # 2. Kontrola vnitřku obdélníků (matematicky, protože nemají fill)
+        # 2. Vnitřek (move)
         rects = self.canvas.find_withtag("rect")
-        # Procházíme odzadu (aby ten nahoře měl přednost)
         for r_id in reversed(rects):
             x1, y1, x2, y2 = self.canvas.coords(r_id)
-            # Matematická kontrola, zda je x,y uvnitř souřadnic
             if x1 <= x <= x2 and y1 <= y <= y2:
                 tags = self.canvas.gettags(r_id)
                 group = next((t for t in tags if t.startswith("group_")), None)
                 if group:
                     return group, "MOVE", None
-        
         return None, None, None
 
     def on_mouse_move(self, event):
-        if self.drag_data["mode"]: return # Pokud táhneme, neměníme kurzor podle polohy
-        
-        group, mode, _ = self._get_target_at_position(event.x, event.y)
-        
-        if mode == "RESIZE":
-            self.canvas.configure(cursor="crosshair")
-        elif mode == "MOVE":
-            self.canvas.configure(cursor="fleur")
-        else:
-            self.canvas.configure(cursor="")
+        if self.drag_data["mode"]: return 
+        _, mode, _ = self._get_target_at_position(event.x, event.y)
+        if mode == "RESIZE": self.canvas.configure(cursor="crosshair")
+        elif mode == "MOVE": self.canvas.configure(cursor="fleur")
+        else: self.canvas.configure(cursor="")
 
     def on_drag_start(self, event):
         group, mode, corner = self._get_target_at_position(event.x, event.y)
-        
         if group and mode:
-            self.drag_data.update({
-                "mode": mode, 
-                "group_tag": group, 
-                "corner": corner, 
-                "x": event.x, 
-                "y": event.y
-            })
-            if mode == "MOVE":
-                self.canvas.configure(cursor="fleur")
+            self.drag_data.update({"mode": mode, "group_tag": group, "corner": corner, "x": event.x, "y": event.y})
+            if mode == "MOVE": self.canvas.configure(cursor="fleur")
 
     def on_drag_motion(self, event):
         if not self.drag_data["group_tag"]: return
@@ -301,30 +284,23 @@ class FileSelectorApp(ctk.CTk):
         dx, dy = event.x - self.drag_data["x"], event.y - self.drag_data["y"]
         
         if self.drag_data["mode"] == "MOVE":
-            # Posuneme celou skupinu (obdélník + rohy)
             self.canvas.move(group, dx, dy)
             self.drag_data["x"], self.drag_data["y"] = event.x, event.y
             
         elif self.drag_data["mode"] == "RESIZE":
-            # Změna velikosti
             rect = self.canvas.find_withtag(f"{group}&&rect")[0]
             x1, y1, x2, y2 = self.canvas.coords(rect)
             c = self.drag_data["corner"]
             
-            # Update souřadnic podle toho, který roh táhneme
             if c == "NW": x1, y1 = event.x, event.y
             elif c == "NE": x2, y1 = event.x, event.y
             elif c == "SE": x2, y2 = event.x, event.y
             elif c == "SW": x1, y2 = event.x, event.y
             
-            # Normalizace (aby x1 bylo menší než x2)
             nx1, nx2 = min(x1, x2), max(x1, x2)
             ny1, ny2 = min(y1, y2), max(y1, y2)
             
-            # Update obdélníku
             self.canvas.coords(rect, nx1, ny1, nx2, ny2)
-            
-            # Update rohů
             s = 6
             self.canvas.coords(self.canvas.find_withtag(f"{group}&&corner_NW")[0], nx1-s, ny1-s, nx1+s, ny1+s)
             self.canvas.coords(self.canvas.find_withtag(f"{group}&&corner_NE")[0], nx2-s, ny1-s, nx2+s, ny1+s)
@@ -348,8 +324,9 @@ class FileSelectorApp(ctk.CTk):
                 if img:
                     self.images_data.append({
                         "path": p, "image": img, 
-                        "coords": {"price": None, "date": None}, 
-                        "final_values": {"price": None, "date": None},
+                        # INIT s klíčem 'vendor'
+                        "coords": {"price": None, "date": None, "vendor": None}, 
+                        "final_values": {"price": None, "date": None, "vendor": None},
                         "ocr_done": False
                     })
             if self.images_data:
@@ -387,6 +364,7 @@ class FileSelectorApp(ctk.CTk):
         if self.current_index == -1: return
         self.images_data[self.current_index]["coords"]["price"] = self._get_coords("price")
         self.images_data[self.current_index]["coords"]["date"] = self._get_coords("date")
+        self.images_data[self.current_index]["coords"]["vendor"] = self._get_coords("vendor")
 
     def _get_coords(self, key):
         rects = self.canvas.find_withtag(f"group_{key}&&rect")
@@ -422,14 +400,22 @@ class FileSelectorApp(ctk.CTk):
         try:
             self.ocr_engine.analyze_image(data["path"])
             
+            # --- AUTOMATICKÉ NASTAVENÍ SOUŘADNIC ---
+            # Pokud nemáme boxy, načteme automatické (price, date)
             if not data["coords"]["price"]: data["coords"]["price"] = self.ocr_engine.get_price_coords()
             if not data["coords"]["date"]: data["coords"]["date"] = self.ocr_engine.get_date_coords()
+            # Vendor zatím nemá auto-detekci, ale metoda existuje (vrátí None)
+            if not data["coords"]["vendor"]: data["coords"]["vendor"] = self.ocr_engine.get_vendor_coords()
             
+            # --- ZÍSKÁNÍ TEXTU ---
             p_text = self.ocr_engine.get_text_from_region(data["path"], data["coords"]["price"]) if data["coords"]["price"] else ""
             d_text = self.ocr_engine.get_text_from_region(data["path"], data["coords"]["date"]) if data["coords"]["date"] else ""
+            v_text = self.ocr_engine.get_text_from_region(data["path"], data["coords"]["vendor"]) if data["coords"]["vendor"] else ""
 
             data["final_values"]["price"] = p_text
             data["final_values"]["date"] = d_text
+            data["final_values"]["vendor"] = v_text
+            
             data["ocr_done"] = True
             self._thread_result_msg = "OCR Hotovo."
         except Exception as e:
@@ -452,7 +438,8 @@ class FileSelectorApp(ctk.CTk):
             export_list.append({
                 "filepath": item["path"],
                 "price_text": item["final_values"]["price"],
-                "date_text": item["final_values"]["date"]
+                "date_text": item["final_values"]["date"],
+                "vendor_text": item["final_values"]["vendor"] # Export prodejce
             })
         self.final_output_data = export_list
         self.destroy()

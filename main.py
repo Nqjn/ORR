@@ -4,10 +4,10 @@ import os
 
 def main():
     # 1. Spustíme GUI
-    # Uživatel zde provede OCR, opraví text v okénkách a klikne "Uložit"
     print("Spouštím aplikaci...")
     
-    # GUI vrací seznam slovníků: [{'filepath':..., 'price_text':..., 'date_text':...}, ...]
+    # GUI vrací seznam výsledků
+    # Očekáváme, že v item bude i klíč 'vendor_text' (nebo 'vendor')
     gui_results = create_window()
 
     if not gui_results:
@@ -27,16 +27,20 @@ def main():
         filename = os.path.basename(item['filepath'])
         print(f"\nZpracovávám: {filename}")
         
-        # Data bereme přímo z GUI (uživatel je mohl ručně opravit)
-        # Používáme .get('', "") pro případ, že by klíč chyběl
+        # --- ZDE JSOU ZMĚNY ---
+        # 1. Načteme prodejce z dat, která nám vrátilo GUI
+        # (Předpokládáme, že GUI ukládá název pod klíčem 'vendor_text')
+        vendor = item.get('vendor_text', "") 
         price = item.get('price_text', "")
         date = item.get('date_text', "")
 
+        print(f"  -> Prodejce: {vendor}") # Kontrolní výpis
         print(f"  -> Cena: {price}")
         print(f"  -> Datum: {date}")
 
-        # Data pro Excel
+        # 2. Přidáme prodejce do slovníku pro Excel
         excel_data = {
+            'vendor': vendor,  # <--- TOTO JE KLÍČOVÉ PRO EXCELHANDLER
             'price': price,
             'date': date,
             'filename': filename

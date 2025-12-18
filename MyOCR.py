@@ -135,6 +135,17 @@ class MyOCR:
     def get_date(self):
         """Returns the date value from the current OCR data."""
         return ReturnDate(self.current_data)
+    
+    def get_vendor_coords(self):
+        """Returns the vendor coordinates from the current OCR data."""
+        return ReturnVendorCoords(self.current_data)
+    
+    def get_vendor(self) -> Optional[str]:
+        """
+        Vrátí textový název prodejce.
+        Kombinuje hledání známých řetězců, právních forem a kontextu (nad IČO).
+        """
+        return ReturnVendor(self.current_data)
 
 # ==========================================
 # STANDALONE HELPER FUNCTIONS (Logic Only)
@@ -250,3 +261,122 @@ def _clean_coords_helper(raw_box):
     except Exception:
         return None
     
+def ReturnVendorCoords(data):
+    """
+    Parses the raw OCR list to find vendor name coordinates.
+    Heuristics:
+    1. Looks for legal entity suffixes (s.r.o., a.s.).
+    2. Looks for 'Dodavatel' keyword.
+    3. Looks for line above 'ICO/DIC'.
+    """
+    if not data:
+        return None
+    
+    # 1. Priorita: Hledání podle právní formy (nejspolehlivější)
+    # Hledáme pouze v horní polovině výsledků (dodavatel je obvykle nahoře)
+    limit_search = len(data) // 2 if len(data) > 10 else len(data)
+    
+    legal_entities = ['s.r.o', 's.r.o.', 'a.s.', 'a.s', 'spol. s r.o.', 'k.s.', 'gmbh']
+    
+    for i in range(limit_search):
+        item = data[i]
+        text_original = item[1]
+        text_lower = text_original.lower()
+
+        # Pokud text obsahuje právní formu
+        if any(entity in text_lower for entity in legal_entities):
+            return _clean_coords_helper(item[0])
+
+    # 2. Priorita: Klíčové slovo "Dodavatel"
+    for i, item in enumerate(data):
+        text_lower = item[1].lower()
+        if 'dodavatel' in text_lower or 'prodávající' in text_lower:
+            # Pokud řádek obsahuje víc textu (např. "Dodavatel: Tesco a.s."), vrátíme ho
+            if len(item[1]) > 12: 
+                return _clean_coords_helper(item[0])
+            # Pokud je to jen nadpis "Dodavatel:", vrátíme NÁSLEDUJÍCÍ řádek
+            elif i + 1 < len(data):
+                return _clean_coords_helper(data[i+1][0])
+
+    # 3. Priorita: Najít IČO/DIČ a vzít řádek PŘED ním
+    # (Firmy často píší Název a hned pod to IČO)
+    for i, item in enumerate(data):
+        text_lower = item[1].lower()
+        # Hledáme patterny IČ/DIČ
+        if 'ič:' in text_lower or 'ičo:' in text_lower or 'dič:' in text_lower or 'cz' in text_lower:
+            # Pokud nejsme na úplně prvním řádku, vrátíme ten předchozí
+            if i > 0:
+                return _clean_coords_helper(data[i-1][0])
+
+    # 4. Fallback: Pokud jsme nic nenašli, vrátíme první nalezený text, 
+    # který vypadá jako název (není číslo a je dost dlouhý), ale to je riskantní.
+    # Raději vrátíme None a necháme uživatele vybrat ručně.
+    return None
+    
+def ReturnVendor(data):
+    """
+    Analyzuje OCR data a snaží se najít název prodejce.
+    """
+    if not data:
+        return None
+    
+    # A. SEZNAM ZNÁMÝCH ŘETĚZCŮ (Často jen logo bez s.r.o.)
+    known_chains = [
+        'albert', 'billa', 'lidl', 'kaufland', 'penny', 'tesco', 'globus', 
+        'coop', 'makro', 'shell', 'omv', 'mol', 'benzina', 'orlen', 
+        'mcdonald', 'kfc', 'burger king', 'starbucks', 'costa coffee',
+        'decathlon', 'obi', 'hornbach', 'ikea', 'datart', 'alza', 'czc',
+        'rossmann', 'dm drogerie', 'teta', 'dr.max', 'benu'
+    ]
+
+    # B. PRÁVNÍ FORMY
+    legal_entities = ['s.r.o', 's.r.o.', 'a.s.', 'a.s', 'spol. s r.o.', 'k.s.', 'v.o.s.', 'gmbh', 'se']
+
+    # Procházíme data (omezíme se na horní polovinu účtenky, tam bývá název)
+    limit_search = len(data) // 2 + 2 if len(data) > 10 else len(data)
+    
+    for i in range(limit_search):
+        item = data[i]
+        text_original = item[1]
+        text_lower = text_original.lower()
+
+        # 1. Priorita: Je to známý řetězec? (Musí to být přesná shoda nebo slovo v názvu)
+        for chain in known_chains:
+            if chain in text_lower:
+                # Vracíme původní formátovaný text (např. "BILLA")
+                return text_original
+
+        # 2. Priorita: Obsahuje právní formu (s.r.o.)?
+        if any(entity in text_lower for entity in legal_entities):
+            return text_original
+
+    # 3. Priorita: Kontext "Dodavatel" nebo "Obchodník"
+    for i, item in enumerate(data):
+        text_lower = item[1].lower()
+        if 'dodavatel' in text_lower or 'obchodník' in text_lower:
+            # Pokud je na řádku i název (např. "Dodavatel: Firma XYZ")
+            if len(item[1]) > 15: 
+                return item[1]
+            # Jinak bereme následující řádek
+            elif i + 1 < len(data):
+                return data[i+1][1]
+
+    # 4. Priorita: Řádek nad IČO/DIČ
+    # Firmy často píší název a hned pod to IČO
+    for i, item in enumerate(data):
+        text_lower = item[1].lower()
+        if 'ič:' in text_lower or 'ičo' in text_lower or 'dič' in text_lower:
+            if i > 0:
+                # Zkontrolujeme, zda ten řádek nad tím není datum nebo čas
+                candidate = data[i-1][1]
+                if not re.search(r'\d{1,2}[:.]\d{1,2}', candidate): 
+                    return candidate
+
+    # 5. Fallback: Pokud jsme nic nenašli, zkusíme vrátit první řádek, 
+    # který má rozumnou délku a nejsou to jen čísla (často název obchodu)
+    if len(data) > 0:
+        first_line = data[0][1]
+        if len(first_line) > 3 and not first_line.replace(' ', '').isdigit():
+            return first_line
+
+    return "Neznámý prodejce"
