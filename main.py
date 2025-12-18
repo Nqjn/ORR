@@ -2,65 +2,55 @@ from GUI import create_window
 from ExcelHandler import ExcelHandler
 import os
 
-# Import s ochranou (stejně jako v GUI)
-try:
-    from MyOCR import MyOCR
-except ImportError:
-    print("WARNING: MyOCR nebylo nalezeno.")
-    MyOCR = None 
-
 def main():
-    # 1. Spustíme GUI (vrací seznam souborů)
-    gui_data_list = create_window()
+    # 1. Spustíme GUI
+    # Uživatel zde provede OCR, opraví text v okénkách a klikne "Uložit"
+    print("Spouštím aplikaci...")
+    
+    # GUI vrací seznam slovníků: [{'filepath':..., 'price_text':..., 'date_text':...}, ...]
+    gui_results = create_window()
 
-    if gui_data_list:
-        print(f"\n--- ZPRACOVÁVÁM {len(gui_data_list)} SOUBORŮ ---")
+    if not gui_results:
+        print("Uživatel zrušil akci nebo nevybral data.")
+        return
+
+    print(f"\n--- UKLÁDÁM DATA PRO {len(gui_results)} SOUBORŮ ---")
+    
+    template_file = "template.xlsx"       
+    output_file = "Vysledny_export.xlsx"
+    
+    # Inicializace handleru
+    handler = ExcelHandler(template_file)
+    saved_count = 0
+
+    for item in gui_results:
+        filename = os.path.basename(item['filepath'])
+        print(f"\nZpracovávám: {filename}")
         
-        # 2. Inicializujeme OCR engine
-        ocr_engine = None
-        if MyOCR:
-            ocr_engine = MyOCR()
-        
-        template_file = "template.xlsx"
-        final_output_file = "Vysledny_export.xlsx"
-        
-        handler = ExcelHandler(template_file)
+        # Data bereme přímo z GUI (uživatel je mohl ručně opravit)
+        # Používáme .get('', "") pro případ, že by klíč chyběl
+        price = item.get('price_text', "")
+        date = item.get('date_text', "")
 
-        # 3. Cyklus přes všechny obrázky
-        for item in gui_data_list:
-            filepath = item['filepath']
-            filename = os.path.basename(filepath)
-            print(f"\nProcessing: {filename}")
+        print(f"  -> Cena: {price}")
+        print(f"  -> Datum: {date}")
 
-            final_price = None
-            final_date = None
+        # Data pro Excel
+        excel_data = {
+            'price': price,
+            'date': date,
+            'filename': filename
+        }
 
-            # Získání textu pomocí OCR
-            if ocr_engine:
-                if item.get('price_coords'):
-                    final_price = ocr_engine.get_text_from_region(filepath, item['price_coords'])
-                    print(f"  -> Cena text: {final_price}")
-                
-                if item.get('date_coords'):
-                    final_date = ocr_engine.get_text_from_region(filepath, item['date_coords'])
-                    print(f"  -> Datum text: {final_date}")
-            else:
-                print("  -> OCR engine není dostupný.")
+        # Zápis
+        if handler.add_invoice_entry(output_file, excel_data):
+            print("  -> OK")
+            saved_count += 1
+        else:
+            print("  -> CHYBA (zkontrolujte výpis výše)")
 
-            # 4. Příprava dat
-            excel_data = {
-                'price': final_price,
-                'date': final_date,
-                'filename': filename
-            }
-
-            # 5. Zápis do Excelu (s formátováním)
-            handler.add_invoice_entry(final_output_file, excel_data)
-
-        print("\n--- HOTOVO ---")
-
-    else:
-        print("Operace zrušena.")
+    print(f"\n--- HOTOVO ({saved_count}/{len(gui_results)}) ---")
+    print(f"Soubor: {os.path.abspath(output_file)}")
 
 if __name__ == "__main__":
     main()

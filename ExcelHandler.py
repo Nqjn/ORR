@@ -2,130 +2,131 @@ import openpyxl
 import os
 from datetime import datetime
 import re
+# NEW: Import Cell to fix the Pylance "MergedCell" error
+from openpyxl.cell.cell import Cell 
 
 class ExcelHandler:
     def __init__(self, template_path):
         self.template_path = template_path
 
     def _clean_price(self, price_text):
-        """
-        Vyčistí cenu. Zvládne '1.200,50', '1 200.50' i '150 Kč'.
-        Vrací float nebo 0.0.
-        """
-        if not price_text:
-            return 0.0
-        
+        """Vyčistí cenu na float. Zvládne '1 200,50 Kč', '1.200', atd."""
+        if not price_text: return 0.0
         text = str(price_text).strip()
-        # Odstraníme měnu a mezery
-        text = text.replace("Kč", "").replace("EUR", "").replace(" ", "")
-        
-        # Nahradíme čárku tečkou, POKUD to vypadá jako desetinná čárka
-        # (jednoduchá logika: nahradíme všechny čárky tečkami)
+        # Odstranit měnu a mezery
+        text = text.replace("Kč", "").replace("EUR", "").replace("€", "").replace(" ", "")
+        # Čárky na tečky
         text = text.replace(",", ".")
-        
-        # Ochrana: Odstraníme vše, co není číslice nebo tečka (např. překlepy OCR)
         try:
-            # Zkusíme převod
             return float(text)
         except ValueError:
             return 0.0
 
     def _parse_date(self, date_text):
         """
-        Agresivní čištění data. Najde datum i v textu ':2.3.2017' nebo '07,05,17'.
+        Najde datum pomocí Regexu. 
+        Opraví chyby jako ':2.3.2017' nebo '07,05,17' nebo čas navíc.
         """
-        if not date_text:
-            return None
-            
+        if not date_text: return None
         text = str(date_text).strip()
-        
-        # 1. Nahradíme čárky tečkami (častá chyba OCR: 07,05,17 -> 07.05.17)
+        # Nahradit čárky tečkami (častá chyba OCR)
         text = text.replace(",", ".")
         
-        # 2. Hledáme vzor data pomocí regulárního výrazu (Regex)
-        # Hledá: 1-2 číslice TEČKA 1-2 číslice TEČKA 2-4 číslice
+        # Regex: Hledá D.M.RRRR nebo D.M.RR (např. 1.2.2023)
+        # Ignoruje vše okolo (dvojtečky, čas atd.)
         match = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{2,4})", text)
         
         if match:
-            day, month, year = match.groups()
-            
-            # Oprava roku na 4 číslice (pokud je "17", uděláme z toho "2017")
-            if len(year) == 2:
-                year = "20" + year
-                
-            clean_date_str = f"{day}.{month}.{year}"
+            d, m, y = match.groups()
+            # Oprava roku na 4 místa (17 -> 2017)
+            if len(y) == 2: y = "20" + y 
             
             try:
-                # Převedeme na skutečný objekt data
-                return datetime.strptime(clean_date_str, "%d.%m.%Y")
-            except ValueError:
-                pass 
-        
-        # Pokud se nepovedlo datum najít, vrátíme None (raději prázdno než nesmyslný text)
+                return datetime.strptime(f"{d}.{m}.{y}", "%d.%m.%Y")
+            except ValueError: 
+                pass
         return None
 
     def add_invoice_entry(self, output_path, data_dict):
+        # 1. Načtení sešitu
         file_to_load = self.template_path
         if os.path.exists(output_path):
             file_to_load = output_path
         elif not os.path.exists(self.template_path):
-            print(f"(-) ERROR: Šablona nenalezena: {self.template_path}")
+            print(f"(!) CHYBA: Nenalezena šablona: {self.template_path}")
             return False
 
         try:
             wb = openpyxl.load_workbook(file_to_load)
             
-            # Výběr listu
-            target_sheet_name = "Příjmy a výdaje"
+            # 2. Výběr listu (Bezpečně)
+            sheet_name = "Příjmy a výdaje"
             ws = None
-            if target_sheet_name in wb.sheetnames:
-                ws = wb[target_sheet_name]
+            if sheet_name in wb.sheetnames:
+                ws = wb[sheet_name]
             else:
                 ws = wb.active # Fallback
 
-            # Ochrana proti None (fix pro Pylance error z vašeho obrázku)
-            if ws is None: 
-                print("(-) Chyba: List nelze načíst.")
+            # Ochrana: Pokud se list nenačetl, skončíme
+            if ws is None:
+                print("(!) CHYBA: Excel nemá žádný aktivní list.")
                 return False
 
-            # --- Najít první volný řádek od 79 ---
+            # 3. Hledání prvního volného řádku
             row = 79
-            # Používáme ws[f'C{row}'] místo ws.cell(...) aby Pylance nehlásil chybu s MergedCell
-            while ws[f'C{row}'].value is not None:
+            # Použijeme cyklus s ochranou
+            while True:
+                # cell(row, col) vrací objekt buňky. .value je hodnota.
+                val = ws.cell(row=row, column=3).value
+                if val is None:
+                    break
                 row += 1
             
-            print(f"(-) Zapisuji na řádek: {row}")
+            print(f"   (Zapisuji na řádek {row})")
 
-            # --- 1. CENA (Sloupec C) ---
+            # 4. Zápis dat
+            
+            # -- CENA (Sloupec 3) --
             if data_dict.get('price'):
                 val_price = self._clean_price(data_dict['price'])
-                cell = ws[f'C{row}']
-                cell.value = val_price
+                c_cell = ws.cell(row=row, column=3)
                 
-                # Vynutíme formát měny, pokud tam není
-                if cell.number_format == 'General':
-                    cell.number_format = '#,##0.00 "Kč"'
+                # FIX: Ověříme, že buňka není MergedCell (sloučená), jinak Pylance hlásí chybu
+                if isinstance(c_cell, Cell):
+                    c_cell.value = val_price
+                    c_cell.number_format = '#,##0.00 "Kč"'
+                else:
+                    print(f"(!) POZOR: Buňka {row},3 je sloučená. Nelze zapsat cenu.")
 
-            # --- 2. DATUM (Sloupec E) ---
+            # -- DATUM (Sloupec 5) --
             if data_dict.get('date'):
                 val_date = self._parse_date(data_dict['date'])
-                cell = ws[f'E{row}']
+                e_cell = ws.cell(row=row, column=5)
                 
-                if val_date:
-                    cell.value = val_date
-                    cell.number_format = 'd.m.yyyy' # Excel si to naformátuje správně
+                # FIX: Ověříme typ buňky
+                if isinstance(e_cell, Cell):
+                    if val_date:
+                        e_cell.value = val_date
+                        e_cell.number_format = 'd.m.yyyy'
+                    else:
+                        # Pokud převod selhal, zapíšeme text
+                        e_cell.value = str(data_dict['date'])
                 else:
-                    # Pokud se datum nepovedlo rozluštit, dáme tam původní text, ale označíme ho
-                    # cell.value = str(data_dict['date']) # Volitelné
-                    pass
+                    print(f"(!) POZOR: Buňka {row},5 je sloučená. Nelze zapsat datum.")
 
-            # --- 3. NÁZEV SOUBORU (Sloupec F) ---
+            # -- NÁZEV SOUBORU (Sloupec 6) --
             if data_dict.get('filename'):
-                ws[f'F{row}'] = data_dict['filename']
-                
+                f_cell = ws.cell(row=row, column=6)
+                if isinstance(f_cell, Cell):
+                    f_cell.value = data_dict['filename']
+
+            # 5. Uložení
             wb.save(output_path)
             return True
 
+        except PermissionError:
+            print(f"(!) CHYBA: Soubor '{output_path}' je otevřený! Zavřete Excel.")
+            return False
         except Exception as e:
-            print(f"Chyba ExcelHandler: {e}")
+            print(f"(!) CHYBA ExcelHandler: {e}")
             return False
