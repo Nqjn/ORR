@@ -79,6 +79,16 @@ class FileSelectorApp(ctk.CTk):
         self.btn_next = ctk.CTkButton(self.nav_frame, text="Další >", width=80, command=lambda: self.change_image(1), state="disabled")
         self.btn_next.pack(side="left", padx=5)
 
+        ctk.CTkLabel(self.control_frame, text="Otočení:", font=("Arial", 14, "bold")).pack(pady=(15, 5))
+        
+        # Vytvoříme malý rámeček, aby byla tlačítka vedle sebe
+        self.rot_frame = ctk.CTkFrame(self.control_frame, fg_color="transparent")
+        self.rot_frame.pack(pady=5)
+        
+        ctk.CTkButton(self.rot_frame, text="↶ Vlevo", width=90, command=lambda: self.rotate_current_image(90)).pack(side="left", padx=5)
+        ctk.CTkButton(self.rot_frame, text="Vpravo ↷", width=90, command=lambda: self.rotate_current_image(-90)).pack(side="left", padx=5)
+        # ---------------------------------
+
 
         ctk.CTkButton(
             self.control_frame, 
@@ -346,6 +356,37 @@ class FileSelectorApp(ctk.CTk):
         self.drag_data = {"x":0, "y":0, "item":None, "mode":None, "group_tag":None, "corner":None}
         self.canvas.configure(cursor="")
 
+    def rotate_current_image(self, angle):
+        """Manuální otočení (Vlevo/Vpravo) a uložení do tempu pro OCR."""
+        if self.original_image is None or self.current_index == -1:
+            return
+            
+        # 1. Otočení v paměti (expand=True zvětší plátno, aby se obrázek neořízl)
+        self.original_image = self.original_image.rotate(angle, expand=True)
+        
+        # 2. Uložení do TEMP souboru (Nutné, aby OCR vidělo otočenou verzi)
+        try:
+            fd, temp_path = tempfile.mkstemp(suffix=".png")
+            os.close(fd)
+            
+            self.original_image.save(temp_path)
+            print(f"[System] Otočený soubor uložen: {temp_path}")
+
+            # 3. Aktualizace dat v aplikaci
+            self.images_data[self.current_index]["image"] = self.original_image
+            self.images_data[self.current_index]["path"] = temp_path
+            
+            # Reset boxů (protože po otočení nesedí souřadnice)
+            self.images_data[self.current_index]["coords"] = {"price": None, "date": None, "vendor": None}
+            self.images_data[self.current_index]["ocr_done"] = False
+            
+            # Překreslení
+            self.show_image_on_canvas()
+            self.status_label.configure(text=f"Otočeno o {angle}°.")
+            
+        except Exception as e:
+            self.status_label.configure(text=f"Chyba rotace: {e}")
+            
     # --- FILE & DATA ---
     def open_file_dialog(self):
         paths = filedialog.askopenfilenames(filetypes=[("Images", "*.png *.jpg *.jpeg"), ("All", "*")])
@@ -576,6 +617,8 @@ class FileSelectorApp(ctk.CTk):
             })
         self.final_output_data = export_list
         self.destroy()
+
+    
 
     def perform_auto_deskew(self):
         """Narrowing image automatically."""
