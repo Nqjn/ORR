@@ -115,10 +115,11 @@ class MyOCR:
 
             # 5. Run OCR on the cropped image
             # detail=0 returns a list of strings without coordinates and confidence score
-            results = self.reader.readtext(img_np, detail=0)
+            results = self.reader.readtext(img_np,)
+            return _make_string(results)
             
             # Join found lines into a single text
-            return "".join([str(x) for x in results])
+        #     return "".join([str(x) for x in results])
         except Exception as e:
             print(f"Error during OCR on the cropped region: {e}")
             return ""

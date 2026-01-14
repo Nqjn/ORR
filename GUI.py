@@ -72,7 +72,7 @@ class FileSelectorApp(ctk.CTk):
         ctk.CTkLabel(self.control_frame, text="Akce:", font=("Arial", 14, "bold")).pack(pady=(20, 5))
 
         self.process_btn = ctk.CTkButton(
-            self.control_frame, text="Spustit OCR (Vše)", command=self.start_ocr_process, 
+            self.control_frame, text="Spustit OCR", command=self.start_ocr_process, 
             state="disabled", fg_color="green"
         )
         self.process_btn.pack(pady=10) 
@@ -397,34 +397,49 @@ class FileSelectorApp(ctk.CTk):
     
     def ocr_thread_logic(self):
         if self.ocr_engine is None: return
-        data = self.images_data[self.current_index]
-        try:
-            self.ocr_engine.analyze_image(data["path"])
-            
-            # --- AUTOMATICKÉ NASTAVENÍ SOUŘADNIC ---
-            # Pokud nemáme boxy, načteme automatické (price, date)
-            if not data["coords"]["price"]: data["coords"]["price"] = self.ocr_engine.get_price_coords()
-            if not data["coords"]["date"]: data["coords"]["date"] = self.ocr_engine.get_date_coords()
-            # Vendor zatím nemá auto-detekci, ale metoda existuje (vrátí None)
-            if not data["coords"]["vendor"]: data["coords"]["vendor"] = self.ocr_engine.get_vendor_coords()
-            
-            # --- ZÍSKÁNÍ TEXTU ---
-            p_text = self.ocr_engine.get_text_from_region(data["path"], data["coords"]["price"]) if data["coords"]["price"] else ""
-            d_text = self.ocr_engine.get_text_from_region(data["path"], data["coords"]["date"]) if data["coords"]["date"] else ""
-            v_text = self.ocr_engine.get_text_from_region(data["path"], data["coords"]["vendor"]) if data["coords"]["vendor"] else ""
 
-            data["final_values"]["price"] = p_text
-            data["final_values"]["date"] = d_text
-            data["final_values"]["vendor"] = v_text
-            
-            data["ocr_done"] = True
-            self._thread_result_msg = "(+)OCR done."
-        except Exception as e:
-            self._thread_result_msg = f"(-)ERROR: {e}"
+        errors = 0
+        total = len(self.images_data)
+
+        for i, data in enumerate(self.images_data):
+            try: 
+                self.current_processing_status = f"OCR {i+1}/{total}..."
+                self.ocr_engine.analyze_image(data["path"])
+                self.status_label.configure(text=f"OCR {i+1}/{total}...")
+                
+                # --- AUTOMATICKÉ NASTAVENÍ SOUŘADNIC ---
+                # Pokud nemáme boxy, načteme automatické (price, date)
+                if not data["coords"]["price"]: data["coords"]["price"] = self.ocr_engine.get_price_coords()
+                if not data["coords"]["date"]: data["coords"]["date"] = self.ocr_engine.get_date_coords()
+                # Vendor zatím nemá auto-detekci, ale metoda existuje (vrátí None)
+                if not data["coords"]["vendor"]: data["coords"]["vendor"] = self.ocr_engine.get_vendor_coords()
+                
+                # --- ZÍSKÁNÍ TEXTU ---
+                p_text = self.ocr_engine.get_text_from_region(data["path"], data["coords"]["price"]) if data["coords"]["price"] else ""
+                d_text = self.ocr_engine.get_text_from_region(data["path"], data["coords"]["date"]) if data["coords"]["date"] else ""
+                v_text = self.ocr_engine.get_text_from_region(data["path"], data["coords"]["vendor"]) if data["coords"]["vendor"] else ""
+
+                data["final_values"]["price"] = p_text
+                data["final_values"]["date"] = d_text
+                data["final_values"]["vendor"] = v_text
+                
+                data["ocr_done"] = True
+                self._thread_result_msg = "(+)OCR done."
+
+            except Exception as e:
+                errors += 1
+                self._thread_result_msg = f"(-)ERROR in file {data['path']}: {e}"
+        if errors == 0:
+            self._thread_result_msg = "OCR without errors."
+        else:
+            self._thread_result_msg = f"OCR completed with {errors} errors."
 
     def monitor_ocr_thread(self):
         if self._ocr_thread and self._ocr_thread.is_alive():
-            self.after(100, self.monitor_ocr_thread)
+            if hasattr(self, 'current_processing_status'):
+                self.status_label.configure(text=self.current_processing_status)
+
+                self.after(100, self.monitor_ocr_thread)
         else:
             self.progress_bar.stop(); self.progress_bar.pack_forget()
             self.status_label.configure(text=self._thread_result_msg)
