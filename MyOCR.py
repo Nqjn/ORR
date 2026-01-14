@@ -33,6 +33,7 @@ class MyOCR:
             path (str): Path to the image file.
         Returns:
             List[Any] | None: OCR result data."""
+        
         if not os.path.exists(path):
             print(f"(-)File does not exist: {path}")
             return None
@@ -42,7 +43,8 @@ class MyOCR:
         # 1. Preprocess Image if needed
         try:
             img  = Image.open(path)
-            ig = ImageOps.exif_transpose(img)
+            img = ImageOps.exif_transpose(img)
+            img = img.convert('L') # Grayscale
 
             if img.format != 'PNG':
                 new_path = os.path.splitext(path)[0] + "_converted.png"
@@ -54,13 +56,13 @@ class MyOCR:
             print(f"(-)Error while preparing image: {e}")
             return None
 
-        print(f"Processing OCR for file: {path}")
+        print(f"(+)Processing OCR for file: {path}")
         
         # 2. Run OCR
         try:
             self.current_data = self.reader.readtext(path_to_ocr)
         except Exception as e:
-            print(f"Chyba při čtení textu: {e}")
+            print(f"(-)ERROR: {e}")
             self.current_data = None
         finally:
             # 3. Clean up temporary file if created
@@ -88,6 +90,8 @@ class MyOCR:
             # 1. Load Image
             img = Image.open(path)
             img = ImageOps.exif_transpose(img) # Rotate according to EXIF data
+
+            img = img.convert('L') # Convert to grayscale
             
             # 2. Calculate Bounding Box (min_x, min_y, max_x, max_y)
             # This ensures it works whether you send 4 points (polygon) or just 2 points (bounding box)
@@ -137,22 +141,22 @@ class MyOCR:
 # STANDALONE HELPER FUNCTIONS (Logic Only)
 # ==========================================
 
-def ReturnPrice(data):
-    """Parses the raw OCR list to find the price value."""
-    if not data:
-        return None
+# def ReturnPrice(data):
+#     """Parses the raw OCR list to find the price value."""
+#     if not data:
+#         return None
     
-    keywords = ['celkem', 'celkcm', 'platbě', 'platbe', 'k platbě', 'k platbe']
+#     keywords = ['celkem', 'celkcm', 'platbě', 'platbe', 'k platbě', 'k platbe']
 
-    for i, res in enumerate(data):
-        txt_original = res[1]
-        txt_lowered = txt_original.lower()
+#     for i, res in enumerate(data):
+#         txt_original = res[1]
+#         txt_lowered = txt_original.lower()
 
-        if any(keyword in txt_lowered for keyword in keywords):
-            if i + 1 < len(data):
-                value = data[i+1][1]
-                return value
-    return None
+#         if any(keyword in txt_lowered for keyword in keywords):
+#             if i + 1 < len(data):
+#                 value = data[i+1][1]
+#                 return value
+#     return None
 
 def ReturnPriceCoords(data):
     """Parses the raw OCR list to find price coordinates."""
@@ -189,9 +193,6 @@ def ReturnDateCoords(data):
         r"\b\d{1,2}\s+\d{1,2}\s+\d{4}" # Spaced
     ]
 
-    keywords = ['datum', 'dne', 'date', 'time', 'duzp', 'vystaveni']
-
-
 
     
     for i, res in enumerate(data):
@@ -227,12 +228,35 @@ def _clean_coords_helper(raw_box):
     except Exception:
         return None
 
-# --- 1. Generátor chytrého regexu (ten už máme) ---
 def make_fuzzy_entity_regex(terms):
+    """
+    Helpers to create fuzzy regex patterns for legal entity terms.
+    Args:
+        terms (list): List of legal entity terms (e.g., ['s.r.o', 'a.s']).
+    Returns:
+        str: Compiled regex pattern string.
+    """
+    replacements = {
+        'o': '[o0]',       # Písmeno o a nula
+        '0': '[o0]',       
+        'i': '[i1l|]',     # i, jedna, malé L, svislítko
+        'l': '[i1l|]',
+        '1': '[i1l|]',
+        's': '[s5]',       # s a pětka
+        'z': '[z2]',       # z a dvojka
+        'b': '[b8]',       # b a osmička
+    }
+
     patterns = []
+
     for term in terms:
-        clean = term.replace('.', '').replace(' ', '')
-        fuzzy_pattern = r'[\.\,\s]*'.join(list(clean)) + r'[\.\,\s]*'
+        clean = term.lower().replace('.', '').replace(' ', '')
+
+        char_pattern = []
+        for char in clean:
+            char_pattern.append(replacements.get(char, char))
+            
+        fuzzy_pattern = r'[\.\,\s]*'.join(char_pattern) + r'[\.\,\s]*'
         patterns.append(fuzzy_pattern)
     return r'(?:\s|^)(' + '|'.join(patterns) + r').*'
 
@@ -281,16 +305,16 @@ def ReturnVendorCoords(data):
         if any(entity in text_lower for entity in keywords):
             return _clean_coords_helper(item[0])
 
-    # Přidáme 'spol' samostatně, protože v OCR se často 's.r.o' oddělí
+    # 1. Priorit: Find legal entity designators (s.r.o., a.s., spol., etc.)
     pattern_str = make_fuzzy_entity_regex(legal_entities)
-    regex = re.compile(pattern_str, re.IGNORECASE)
+    pattern = re.compile(pattern_str, re.IGNORECASE)
 
     for i in range(len(data)):
         item = data[i]
         text_original = item[1] # Celý text řádku, např: "BILLA BILLA SPOL , S R.o ..."
         
         # Použijeme search, který vrátí "match object"
-        match = regex.search(text_original)
+        match = pattern.search(text_original)
         
         if match:
             # Získáme index, kde začíná nalezené klíčové slovo (např. kde začíná "SPOL")
@@ -309,7 +333,7 @@ def ReturnVendorCoords(data):
                 # Vrátíme předchozí řádek ze seznamu
                 return _clean_coords_helper(data[i-1][0])
                 
-    return None
+    
 
 
 

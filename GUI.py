@@ -316,7 +316,7 @@ class FileSelectorApp(ctk.CTk):
 
     # --- FILE & DATA ---
     def open_file_dialog(self):
-        paths = filedialog.askopenfilenames(filetypes=[("Images", "*.png;*.jpg;*.jpeg"), ("All", "*.*")])
+        paths = filedialog.askopenfilenames(filetypes=[("Images", "*.png *.jpg *.jpeg"), ("All", "*")])
         if paths:
             self.images_data = []
             for p in paths:
@@ -394,6 +394,7 @@ class FileSelectorApp(ctk.CTk):
         self._ocr_thread.start()
         self.monitor_ocr_thread()
 
+    
     def ocr_thread_logic(self):
         if self.ocr_engine is None: return
         data = self.images_data[self.current_index]
@@ -417,9 +418,9 @@ class FileSelectorApp(ctk.CTk):
             data["final_values"]["vendor"] = v_text
             
             data["ocr_done"] = True
-            self._thread_result_msg = "OCR Hotovo."
+            self._thread_result_msg = "(+)OCR done."
         except Exception as e:
-            self._thread_result_msg = f"Chyba: {e}"
+            self._thread_result_msg = f"(-)ERROR: {e}"
 
     def monitor_ocr_thread(self):
         if self._ocr_thread and self._ocr_thread.is_alive():
