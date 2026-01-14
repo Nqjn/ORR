@@ -3,7 +3,14 @@ import customtkinter as ctk
 from tkinter import filedialog
 import os
 from PIL import Image, ImageOps, ImageTk 
+import cv2
+import tempfile
+import math
 import threading
+import cv2
+import numpy as np
+import math
+
 from typing import Any, List, Optional
 
 # --- IMPORT MyOCR ---
@@ -40,8 +47,11 @@ class FileSelectorApp(ctk.CTk):
         self._ocr_thread = None 
 
         # --- GUI SETUP ---
+
+
         self.title("OCR - Editor s korekturou")
         self.geometry("1200x800")
+
 
         self.ocr_engine = None
         if MyOCR:
@@ -69,12 +79,33 @@ class FileSelectorApp(ctk.CTk):
         self.btn_next = ctk.CTkButton(self.nav_frame, text="Další >", width=80, command=lambda: self.change_image(1), state="disabled")
         self.btn_next.pack(side="left", padx=5)
 
+
+        ctk.CTkButton(
+            self.control_frame, 
+            text="Srovnat text (Auto)", 
+            command=self.perform_auto_deskew,
+            fg_color="#555555"
+        ).pack(pady=5)
+
         ctk.CTkLabel(self.control_frame, text="Akce:", font=("Arial", 14, "bold")).pack(pady=(20, 5))
+        
+        self.btn_ocr_current = ctk.CTkButton(
+            self.control_frame, 
+            text="Spustit OCR (Aktuální)", 
+            command=self.run_current_image_ocr,
+            fg_color="#2EA043",
+            hover_color="#2C974B",
+            state="disabled"
+        )
+        self.btn_ocr_current.pack(pady=5)
+
 
         self.process_btn = ctk.CTkButton(
-            self.control_frame, text="Spustit OCR", command=self.start_ocr_process, 
+            self.control_frame, text="Spustit OCR Vše", command=self.start_ocr_process, 
             state="disabled", fg_color="green"
         )
+
+
         self.process_btn.pack(pady=10) 
         
         self.progress_bar = ctk.CTkProgressBar(self.control_frame)
@@ -117,6 +148,7 @@ class FileSelectorApp(ctk.CTk):
         self.canvas.bind("<Motion>", self.on_mouse_move)
 
     # --- CANVAS & ENTRY LOGIC ---
+
     def on_resize(self, event):
         self.canvas.coords(self.text_id, self.canvas.winfo_width()/2, self.canvas.winfo_height()/2)
         if self.original_image:
@@ -333,6 +365,7 @@ class FileSelectorApp(ctk.CTk):
                 self.current_index = 0
                 self.load_image_by_index(0)
                 self.process_btn.configure(state="normal")
+                self.btn_ocr_current.configure(state="normal")
             self.update_gui_labels()
 
     def _load_image(self, path):
@@ -382,11 +415,80 @@ class FileSelectorApp(ctk.CTk):
         self.btn_next.configure(state="normal" if self.current_index < total - 1 else "disabled")
 
     # --- OCR THREAD ---
+    def run_current_image_ocr(self):
+        """
+        Spustí kompletní OCR pouze pro aktuálně zobrazený obrázek.
+        """
+        if self.ocr_engine is None or self.current_index == -1:
+            return
+        
+        self.btn_ocr_current.configure(state="disabled")
+
+        # 1. Uložíme aktuální stav (pokud uživatel hýbal boxy ručně)
+        self._save_coords_from_canvas()
+
+        # 2. UI Feedback
+        self.status_label.configure(text="Skenuji aktuální snímek...")
+        self.update() # Vynutí překreslení okna, aby text nezmrznul
+
+        data = self.images_data[self.current_index]
+        path = data["path"]
+
+        try:
+            # 3. Spuštění analýzy v EasyOCR (to chvíli trvá)
+            self.ocr_engine.analyze_image(path)
+
+            # 4. Aplikace logiky pro hledání souřadnic a textu
+            # (Stejná logika jako v hromadném vlákně)
+
+            # --- PRICE ---
+            if not data["coords"]["price"]: 
+                data["coords"]["price"] = self.ocr_engine.get_price_coords()
+            
+            p_text = self.ocr_engine.get_text_from_region(path, data["coords"]["price"]) if data["coords"]["price"] else ""
+
+            # --- DATE ---
+            d_text = ""
+            # Zkusíme regex auto-detekci
+            if not data["coords"]["date"]:
+                found_coords, found_text = self.ocr_engine.get_date()
+                if found_coords:
+                    data["coords"]["date"] = found_coords
+                    d_text = found_text
+            
+            # Pokud regex selhal, ale máme souřadnice, přečteme region
+            if data["coords"]["date"] and not d_text:
+                d_text = self.ocr_engine.get_text_from_region(path, data["coords"]["date"])
+
+            # --- VENDOR ---
+            if not data["coords"]["vendor"]: 
+                data["coords"]["vendor"] = self.ocr_engine.get_vendor_coords()
+            
+            v_text = self.ocr_engine.get_text_from_region(path, data["coords"]["vendor"]) if data["coords"]["vendor"] else ""
+
+            # 5. Uložení výsledků
+            data["final_values"]["price"] = p_text
+            data["final_values"]["date"] = d_text
+            data["final_values"]["vendor"] = v_text
+            data["ocr_done"] = True
+
+            # 6. Refresh GUI
+            self.show_image_on_canvas()
+            self.status_label.configure(text="OCR aktuálního snímku hotovo.")
+
+        except Exception as e:
+            self.status_label.configure(text=f"Chyba OCR: {e}")
+            print(f"Error: {e}")
+        finally:
+            self.btn_ocr_current.configure(state="normal")
+        
+
     def start_ocr_process(self):
         if self.ocr_engine is None: return
         self._save_coords_from_canvas()
         
         self.process_btn.configure(state="disabled")
+        
         self.progress_bar.pack(pady=10); self.progress_bar.start()
         self.status_label.configure(text="OCR běží (automaticky)...")
         
@@ -410,13 +512,28 @@ class FileSelectorApp(ctk.CTk):
                 # --- AUTOMATICKÉ NASTAVENÍ SOUŘADNIC ---
                 # Pokud nemáme boxy, načteme automatické (price, date)
                 if not data["coords"]["price"]: data["coords"]["price"] = self.ocr_engine.get_price_coords()
-                if not data["coords"]["date"]: data["coords"]["date"] = self.ocr_engine.get_date_coords()
+
+                if not data["coords"]["date"]: found_coords, found_text = self.ocr_engine.get_date()
+
+                if found_coords:
+                    data["coords"]["date"] = found_coords
+
+                    data["final_values"]["date"] = found_text
+
                 # Vendor zatím nemá auto-detekci, ale metoda existuje (vrátí None)
                 if not data["coords"]["vendor"]: data["coords"]["vendor"] = self.ocr_engine.get_vendor_coords()
                 
                 # --- ZÍSKÁNÍ TEXTU ---
+                if data["final_values"]["date"]:
+                    d_text = data["final_values"]["date"]
+                else:
+                    d_text = self.ocr_engine.get_text_from_region(data["path"], data["coords"]["date"]) if data["coords"]["date"] else ""
+
+
+                v_text = self.ocr_engine.get_text_from_region(data["path"], data["coords"]["vendor"]) if data["coords"]["vendor"] else ""
+
                 p_text = self.ocr_engine.get_text_from_region(data["path"], data["coords"]["price"]) if data["coords"]["price"] else ""
-                d_text = self.ocr_engine.get_text_from_region(data["path"], data["coords"]["date"]) if data["coords"]["date"] else ""
+               
                 v_text = self.ocr_engine.get_text_from_region(data["path"], data["coords"]["vendor"]) if data["coords"]["vendor"] else ""
 
                 data["final_values"]["price"] = p_text
@@ -459,6 +576,113 @@ class FileSelectorApp(ctk.CTk):
             })
         self.final_output_data = export_list
         self.destroy()
+
+    def perform_auto_deskew(self):
+        """Narrowing image automatically."""
+        if self.original_image is None or self.current_index == -1:
+            return
+
+        self.status_label.configure(text="Probíhá analýza náklonu...")
+        self.update()
+
+        # 1. Zavoláme logiku narovnání
+        new_image, changed = deskew_image_logic(self.original_image)
+        
+        if not changed:
+            self.status_label.configure(text="Obrázek je rovný.")
+            return
+
+        # 2. Uložení do TEMP souboru (Nutné pro OCR!)
+        try:
+            fd, temp_path = tempfile.mkstemp(suffix=".png")
+            os.close(fd)
+            
+            new_image.save(temp_path)
+            print(f"[System] Narovnaný soubor uložen: {temp_path}")
+
+            # 3. Aktualizace dat v aplikaci
+            self.original_image = new_image
+            self.images_data[self.current_index]["image"] = new_image
+            self.images_data[self.current_index]["path"] = temp_path # Podstrčíme novou cestu
+            
+            # Reset boxů (staré souřadnice už nesedí)
+            self.images_data[self.current_index]["coords"] = {"price": None, "date": None, "vendor": None}
+            self.images_data[self.current_index]["ocr_done"] = False
+            
+            # Překreslení
+            self.show_image_on_canvas()
+            self.status_label.configure(text=f"Narovnáno. Spusťte OCR.")
+            
+        except Exception as e:
+            self.status_label.configure(text=f"Chyba: {e}")
+
+def deskew_image_logic(pil_image):
+    """
+    Narovná obrázek a zvětší plátno (Verze bez chyb Pylance).
+    """
+    # 1. Konverze PIL -> OpenCV
+    img = np.array(pil_image)
+    if len(img.shape) == 3:
+        img = img[:, :, ::-1].copy()
+    
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray, 50, 150, apertureSize=3)
+    
+    # Detekce čar
+    lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=100, minLineLength=100, maxLineGap=20)
+    
+    # Pokud se nic nenašlo, vracíme původní
+    if lines is None: 
+        return pil_image, False
+
+    angles = []
+
+
+    cleaned_lines = lines[:, 0]
+
+    for x1, y1, x2, y2 in cleaned_lines:
+        # Převedení na standardní int (pro jistotu)
+        x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+
+        if x2 == x1: continue # Ochrana dělení nulou
+        
+        angle_deg = math.degrees(math.atan2(y2 - y1, x2 - x1))
+        
+        # Filtr úhlů
+        if -45 < angle_deg < 45:
+            angles.append(angle_deg)
+
+    if not angles: 
+        return pil_image, False
+
+
+    final_angle = float(np.median(angles))
+    
+    if abs(final_angle) < 0.1: 
+        return pil_image, False
+
+    # === VÝPOČET NOVÉ VELIKOSTI ===
+    (h, w) = img.shape[:2]
+    center = (w // 2, h // 2)
+    
+    M = cv2.getRotationMatrix2D(center, final_angle, 1.0)
+    cos = np.abs(M[0, 0])
+    sin = np.abs(M[0, 1])
+
+    nW = int((h * sin) + (w * cos))
+    nH = int((h * cos) + (w * sin))
+
+    M[0, 2] += (nW / 2) - center[0]
+    M[1, 2] += (nH / 2) - center[1]
+
+    rotated = cv2.warpAffine(
+        img, M, (nW, nH), 
+        flags=cv2.INTER_CUBIC, 
+        borderMode=cv2.BORDER_CONSTANT, 
+        borderValue=(255, 255, 255)
+    )
+
+    return Image.fromarray(cv2.cvtColor(rotated, cv2.COLOR_BGR2RGB)), True
 
 def create_window():
     app = FileSelectorApp()

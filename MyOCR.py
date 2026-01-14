@@ -3,7 +3,7 @@ import os
 from PIL import Image, ImageOps
 import re
 import numpy as np
-from typing import List, Tuple, Any, Optional
+from typing import List, Any, Optional
 
 class MyOCR:
     """
@@ -25,6 +25,7 @@ class MyOCR:
         self.reader = MyOCR._reader
         self.current_data: Optional[List[Any]] = None
         self.current_image_path = None
+
 
     def analyze_image(self, path: str):
         """
@@ -114,7 +115,6 @@ class MyOCR:
             img_np = np.array(cropped_img)
 
             # 5. Run OCR on the cropped image
-            # detail=0 returns a list of strings without coordinates and confidence score
             results = self.reader.readtext(img_np,)
             return _make_string(results)
             
@@ -128,9 +128,9 @@ class MyOCR:
         """Returns the price coordinates from the current OCR data."""
         return ReturnPriceCoords(self.current_data)
 
-    def get_date_coords(self):
-        """Returns the date coordinates from the current OCR data."""
-        return ReturnDateCoords(self.current_data)
+    def get_date(self):
+        """Returns (coords, text) from the current OCR data."""
+        return ReturnDate(self.current_data)
     
     def get_vendor_coords(self):
         """Returns the vendor coordinates from the current OCR data."""
@@ -177,12 +177,14 @@ def ReturnPriceCoords(data):
                 found_raw_coords = res[0] # Coords of the label (fallback)
                 break
 
+
+
     return _clean_coords_helper(found_raw_coords)
 
-def ReturnDateCoords(data):
+def ReturnDate(data):
     """Parses the raw OCR list to find date coordinates."""
     if not data:
-        return None
+        return None, ""
     
     print(_make_string(data))
 
@@ -202,11 +204,13 @@ def ReturnDateCoords(data):
 
 
         for pat in patterns:
-            if re.search(pat, txt_original):
-                print(f"Date Simple Match: {txt_original}")
-                return _clean_coords_helper(res[0])
+            match = re.search(pat, txt_original)
+            if match:
+                found_text = match.group(0)
+                print(f"Date Simple Match: {found_text}, Original: {txt_original}")
+                return _clean_coords_helper(res[0]), found_text
             
-    return None
+    return None, ""
 
 
 def _make_string(data):
@@ -214,7 +218,7 @@ def _make_string(data):
     if not data:
         return ""
     texts = [res[1] for res in data if isinstance(res[1], str)]
-    return " ".join(texts)
+    return "".join(texts)
 
 
 def _clean_coords_helper(raw_box):
