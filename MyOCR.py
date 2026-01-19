@@ -267,7 +267,7 @@ def make_fuzzy_entity_regex(terms):
 
 def ReturnVendorCoords(data):
     if not data:
-        return None
+        return None, ""
         
     legal_entities = ['s.r.o', 'a.s', 'spol', 'spol. s r.o', 'k.s', 'gmbh']
 
@@ -301,16 +301,36 @@ def ReturnVendorCoords(data):
     'mcdonald', 'kfc', 'burger king', 'starbucks', 'costa coffee', 
     'bageterie boulevard', 'paul', 'ugova cerstva stava'
     ]
+
+    # 1. Priorita: Přímé shody s klíčovými slovy (známé řetězce)
+
+    strict_keywords = [k for k in keywords if len(k) <= 3]
+    lossy_keywords = [k for k in keywords if len(k) > 3]
+
+    strict_pattern = None
+    if strict_keywords:
+        strict_sorted = sorted(strict_keywords, key=len, reverse=True)
+        strict_pattern = re.compile(r'\b(' + '|'.join(re.escape(k) for k in strict_sorted) + r')\b', re.IGNORECASE)
+
+    for i, res in enumerate(data):
+        txt_original = res[1]
+        if not isinstance(txt_original, str): continue
+        txt_lower = txt_original.lower()
+
+        # Long words 
+        for brand in lossy_keywords:
+            if brand in txt_lower:
+                return _clean_coords_helper(res[0]), brand
+        
+        # Short words - strict match
+        if strict_pattern:
+            match = strict_pattern.search(txt_lower)
+            if match:
+                normalized_brand = match.group(1).lower()
+                return _clean_coords_helper(res[0]), normalized_brand
     
-    for i in range(len(data)):
-        item = data[i]
-        text_original = item[1] 
-        text_lower = text_original.lower()
-
-        if any(entity in text_lower for entity in keywords):
-            return _clean_coords_helper(item[0])
-
-    # 1. Priorit: Find legal entity designators (s.r.o., a.s., spol., etc.)
+        
+    # 2. Priorita: Hledání právních forem (s.r.o., a.s., spol., etc.)
     pattern_str = make_fuzzy_entity_regex(legal_entities)
     pattern = re.compile(pattern_str, re.IGNORECASE)
 
@@ -331,40 +351,33 @@ def ReturnVendorCoords(data):
             # KROK A: Je před 's.r.o.' nějaký text na stejném řádku?
             if len(vendor_candidate) > 1: # >1 aby to nebyl jen šum
                 
-                return vendor_candidate 
+                return  _clean_coords_helper(item[0]), vendor_candidate 
                 
             # KROK B: Na řádku před s.r.o nic není (s.r.o je na začátku řádku)
             elif i > 0:
                 # Vrátíme předchozí řádek ze seznamu
-                return _clean_coords_helper(data[i-1][0])
-                
-    
+                return _clean_coords_helper(data[i-1][0]), data[i-1][1]
 
-
-
-    # 2. Priorita: Klíčové slovo "Dodavatel"
+    # 3. Priorita: Klíčové slovo "Dodavatel"
     for i, item in enumerate(data):
         text_lower = item[1].lower()
         if 'dodavatel' in text_lower or 'prodávající' in text_lower:
             # Pokud řádek obsahuje víc textu (např. "Dodavatel: Tesco a.s."), vrátíme ho
             if len(item[1]) > 12: 
-                return _clean_coords_helper(item[0])
+                return _clean_coords_helper(item[0]), item[1]
             # Pokud je to jen nadpis "Dodavatel:", vrátíme NÁSLEDUJÍCÍ řádek
             elif i + 1 < len(data):
-                return _clean_coords_helper(data[i+1][0])
+                return _clean_coords_helper(data[i+1][0]), data[i+1][1]
 
-    # 3. Priorita: Najít IČO/DIČ a vzít řádek PŘED ním
-    # (Firmy často píší Název a hned pod to IČO)
+
+    # 4. Priorita: Najít IČO/DIČ a vzít řádek PŘED ním
     for i, item in enumerate(data):
         text_lower = item[1].lower()
         # Hledáme patterny IČ/DIČ
         if 'ič:' in text_lower or 'ičo:' in text_lower or 'dič:' in text_lower or 'cz' in text_lower:
             # Pokud nejsme na úplně prvním řádku, vrátíme ten předchozí
             if i > 0:
-                return _clean_coords_helper(data[i-1][0])
+                return _clean_coords_helper(data[i-1][0]), data[i-1][1]
 
-    # 4. Fallback: Pokud jsme nic nenašli, vrátíme první nalezený text, 
-    # který vypadá jako název (není číslo a je dost dlouhý), ale to je riskantní.
-    # Raději vrátíme None a necháme uživatele vybrat ručně.
-    return None
+    return None, ""
     

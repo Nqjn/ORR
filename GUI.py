@@ -552,30 +552,42 @@ class FileSelectorApp(ctk.CTk):
                 
                 # --- AUTOMATICKÉ NASTAVENÍ SOUŘADNIC ---
                 # Pokud nemáme boxy, načteme automatické (price, date)
+                # Price
                 if not data["coords"]["price"]: data["coords"]["price"] = self.ocr_engine.get_price_coords()
 
-                if not data["coords"]["date"]: found_coords, found_text = self.ocr_engine.get_date()
+                # Date
+                if not data["coords"]["date"]: d_coords, d_text = self.ocr_engine.get_date()
 
-                if found_coords:
-                    data["coords"]["date"] = found_coords
+                if d_coords:
+                    data["coords"]["date"] = d_coords
 
-                    data["final_values"]["date"] = found_text
+                    data["final_values"]["date"] = d_text
 
-                # Vendor zatím nemá auto-detekci, ale metoda existuje (vrátí None)
-                if not data["coords"]["vendor"]: data["coords"]["vendor"] = self.ocr_engine.get_vendor_coords()
+                # Vendor 
+                if not data["coords"]["vendor"]: v_coords, v_text = self.ocr_engine.get_vendor_coords()
+                
+                if v_coords:
+                    data["coords"]["vendor"] = v_coords
+                    data["final_values"]["vendor"] = v_text
                 
                 # --- ZÍSKÁNÍ TEXTU ---
+
+                # Date
                 if data["final_values"]["date"]:
                     d_text = data["final_values"]["date"]
                 else:
                     d_text = self.ocr_engine.get_text_from_region(data["path"], data["coords"]["date"]) if data["coords"]["date"] else ""
 
+                # Vendor
+                if data["final_values"]["vendor"]: v_text = data["final_values"]["vendor"]
+                else:
+                    v_text = self.ocr_engine.get_text_from_region(data["path"], data["coords"]["vendor"]) if data["coords"]["vendor"] else ""
 
-                v_text = self.ocr_engine.get_text_from_region(data["path"], data["coords"]["vendor"]) if data["coords"]["vendor"] else ""
+                # Price
 
                 p_text = self.ocr_engine.get_text_from_region(data["path"], data["coords"]["price"]) if data["coords"]["price"] else ""
                
-                v_text = self.ocr_engine.get_text_from_region(data["path"], data["coords"]["vendor"]) if data["coords"]["vendor"] else ""
+
 
                 data["final_values"]["price"] = p_text
                 data["final_values"]["date"] = d_text

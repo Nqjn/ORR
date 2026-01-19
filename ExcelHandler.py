@@ -136,30 +136,3 @@ class ExcelHandler:
             print(f"(!) CHYBA: {e}")
             return False
 
-# ==========================================
-# HLAVNÍ ČÁST - TOTO SPUSTÍTE PRO TEST
-# ==========================================
-if __name__ == "__main__":
-    # Nastavení cest
-    sablona = "template.xlsx"
-    vystup = "vysledek_test.xlsx"
-
-    # Vytvoření instance
-    handler = ExcelHandler(sablona)
-
-    # Testovací data - ZDE SI OVĚŘÍTE, JESTLI FUNGUJE ZÁPIS PRODEJCE
-    testovaci_data = {
-        'vendor': 'TEST_PRODEJCE_OK',  # <-- Toto se musí objevit v Excelu
-        'price': '1500,00',
-        'date': '18.12.2025',
-        'filename': 'test_soubor.jpg'
-    }
-
-    print(f"--- Spouštím test s šablonou: {sablona} ---")
-    
-    # Spuštění
-    if os.path.exists(sablona):
-        handler.add_invoice_entry(vystup, testovaci_data)
-        print(f"\nPokud vidíte 'OK', otevřete soubor '{vystup}' a zkontrolujte řádek 79+.")
-    else:
-        print(f"(!) Soubor '{sablona}' v této složce neexistuje. Ujistěte se, že je název správně.")
