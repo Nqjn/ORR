@@ -126,7 +126,7 @@ class MyOCR:
     
     def get_price_coords(self):
         """Returns the price coordinates from the current OCR data."""
-        return ReturnPriceCoords(self.current_data)
+        return ReturnPrice(self.current_data)
 
     def get_date(self):
         """Returns (coords, text) from the current OCR data."""
@@ -134,7 +134,7 @@ class MyOCR:
     
     def get_vendor_coords(self):
         """Returns the vendor coordinates from the current OCR data."""
-        return ReturnVendorCoords(self.current_data)
+        return ReturnVendor(self.current_data)
     
 
 
@@ -142,44 +142,49 @@ class MyOCR:
 # STANDALONE HELPER FUNCTIONS (Logic Only)
 # ==========================================
 
-# def ReturnPrice(data):
-#     """Parses the raw OCR list to find the price value."""
-#     if not data:
-#         return None
-    
-#     keywords = ['celkem', 'celkcm', 'platbě', 'platbe', 'k platbě', 'k platbe']
-
-#     for i, res in enumerate(data):
-#         txt_original = res[1]
-#         txt_lowered = txt_original.lower()
-
-#         if any(keyword in txt_lowered for keyword in keywords):
-#             if i + 1 < len(data):
-#                 value = data[i+1][1]
-#                 return value
-#     return None
-
-def ReturnPriceCoords(data):
+def ReturnPrice(data):
     """Parses the raw OCR list to find price coordinates."""
     if not data:
-        return None
+        return None, ""
     
-    keywords = ['celkem', 'celkcm', 'platbě', 'platbe', 'k platbě', 'k platbe']
-    found_raw_coords = None
-
-    for i, res in enumerate(data):
-        txt_lowered = res[1].lower()
-        if any(keyword in txt_lowered for keyword in keywords):
-            if i + 1 < len(data):
-                found_raw_coords = data[i+1][0] # Coords of the value
-                break
-            else:
-                found_raw_coords = res[0] # Coords of the label (fallback)
-                break
 
 
+    
+    keywords = r"(?:celkem|suma|k platbě|spolu|spolu k úhradě|k úhradě|celková částka|celkový součet|total|amount due|amount payable|total amount|sum total|grand total|invoice total|balance due|total due|total payable|total amount due|total amount payable|celkem k úhradě|částka k úhradě|částka celkem|fakturováno celkem|fakturováno k úhradě)"
+    price_pattern = r"\d[\d\s.,]*\d"
 
-    return _clean_coords_helper(found_raw_coords)
+    full_pattern = f"(?i){keywords}.*?({price_pattern})"
+
+    keywords_only_pattern = re.compile(f"(?i){keywords}")
+
+    for i, item in enumerate(data):
+        coords = item[0]
+        text_original = item[1]
+
+        if not isinstance(text_original, str): continue
+
+        match = re.search(full_pattern, text_original)
+        if match:
+            raw_price = match.group(1)
+            final_price = _clean_price_string(raw_price)
+
+            if final_price:
+                # Found full match with price
+                return _clean_coords_helper(coords), str(final_price)
+            
+        # If only keywords matched, look at next line for price    
+        if keywords_only_pattern.search(text_original):
+            if i +1 < len(data):
+                next_item = data[i+1]
+                next_text = next_item[1]
+
+                if any (char.isdigit() for char in next_text):
+
+                    cleaned_next = _clean_price_string(next_text)
+                    if cleaned_next:
+                        return _clean_coords_helper(next_item[0]), str(cleaned_next)
+    return None, ""
+
 
 def ReturnDate(data):
     """Parses the raw OCR list to find date coordinates."""
@@ -196,12 +201,10 @@ def ReturnDate(data):
         r"\b\d{1,2}\s+\d{1,2}\s+\d{4}" # Spaced
     ]
 
-
     
     for i, res in enumerate(data):
         txt_original = res[1]
         if not isinstance(txt_original, str): continue
-
 
         for pat in patterns:
             match = re.search(pat, txt_original)
@@ -213,59 +216,7 @@ def ReturnDate(data):
     return None, ""
 
 
-def _make_string(data):
-    """Internal helper to concatenate all recognized text."""
-    if not data:
-        return ""
-    texts = [res[1] for res in data if isinstance(res[1], str)]
-    return "".join(texts)
-
-
-def _clean_coords_helper(raw_box):
-    """Internal helper to format coordinates."""
-    if not raw_box:
-        return None
-    try:
-        cleaned = []
-        for point in raw_box:
-            cleaned.append([int(point[0]), int(point[1])])
-        return cleaned
-    except Exception:
-        return None
-
-def make_fuzzy_entity_regex(terms):
-    """
-    Helpers to create fuzzy regex patterns for legal entity terms.
-    Args:
-        terms (list): List of legal entity terms (e.g., ['s.r.o', 'a.s']).
-    Returns:
-        str: Compiled regex pattern string.
-    """
-    replacements = {
-        'o': '[o0]',       # Písmeno o a nula
-        '0': '[o0]',       
-        'i': '[i1l|]',     # i, jedna, malé L, svislítko
-        'l': '[i1l|]',
-        '1': '[i1l|]',
-        's': '[s5]',       # s a pětka
-        'z': '[z2]',       # z a dvojka
-        'b': '[b8]',       # b a osmička
-    }
-
-    patterns = []
-
-    for term in terms:
-        clean = term.lower().replace('.', '').replace(' ', '')
-
-        char_pattern = []
-        for char in clean:
-            char_pattern.append(replacements.get(char, char))
-            
-        fuzzy_pattern = r'[\.\,\s]*'.join(char_pattern) + r'[\.\,\s]*'
-        patterns.append(fuzzy_pattern)
-    return r'(?:\s|^)(' + '|'.join(patterns) + r').*'
-
-def ReturnVendorCoords(data):
+def ReturnVendor(data):
     if not data:
         return None, ""
         
@@ -380,4 +331,84 @@ def ReturnVendorCoords(data):
                 return _clean_coords_helper(data[i-1][0]), data[i-1][1]
 
     return None, ""
+    
+def _make_string(data):
+    """Internal helper to concatenate all recognized text."""
+    if not data:
+        return ""
+    texts = [res[1] for res in data if isinstance(res[1], str)]
+    return "".join(texts)
+
+
+def _clean_coords_helper(raw_box):
+    """Internal helper to format coordinates."""
+    if not raw_box:
+        return None
+    try:
+        cleaned = []
+        for point in raw_box:
+            cleaned.append([int(point[0]), int(point[1])])
+        return cleaned
+    except Exception:
+        return None
+
+def make_fuzzy_entity_regex(terms):
+    """
+    Helpers to create fuzzy regex patterns for legal entity terms.
+    Args:
+        terms (list): List of legal entity terms (e.g., ['s.r.o', 'a.s']).
+    Returns:
+        str: Compiled regex pattern string.
+    """
+    replacements = {
+        'o': '[o0]',       # Písmeno o a nula
+        '0': '[o0]',       
+        'i': '[i1l|]',     # i, jedna, malé L, svislítko
+        'l': '[i1l|]',
+        '1': '[i1l|]',
+        's': '[s5]',       # s a pětka
+        'z': '[z2]',       # z a dvojka
+        'b': '[b8]',       # b a osmička
+    }
+
+    patterns = []
+
+    for term in terms:
+        clean = term.lower().replace('.', '').replace(' ', '')
+
+        char_pattern = []
+        for char in clean:
+            char_pattern.append(replacements.get(char, char))
+            
+        fuzzy_pattern = r'[\.\,\s]*'.join(char_pattern) + r'[\.\,\s]*'
+        patterns.append(fuzzy_pattern)
+    return r'(?:\s|^)(' + '|'.join(patterns) + r').*'
+
+def _clean_price_string(price_str: str) -> Optional[float]:
+    """
+    Pomocná funkce pro čištění stringu ceny.
+    Převede "1 200,50" -> 1200.5
+    """
+    if not price_str:
+        return None
+
+    # 1. Odstraníme vše kromě číslic, čárky a tečky
+    # (Odstraní to 'Kč', 'EUR', písmena, znaky měny)
+    clean = re.sub(r"[^\d.,]", "", price_str)
+    
+    # 2. Nahrazení desetinné čárky tečkou
+    if "," in clean:
+        clean = clean.replace(",", ".")
+    
+    # 3. Ošetření více teček (např. 1.200.50 -> 1200.50)
+    # Logika: Všechny tečky kromě té poslední jsou oddělovače tisíců -> smazat
+    if clean.count(".") > 1:
+        parts = clean.split(".")
+        # Spojíme vše kromě posledního dílu, pak přidáme poslední díl s tečkou
+        clean = "".join(parts[:-1]) + "." + parts[-1]
+
+    try:
+        return float(clean)
+    except ValueError:
+        return None
     

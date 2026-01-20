@@ -389,7 +389,9 @@ class FileSelectorApp(ctk.CTk):
             
     # --- FILE & DATA ---
     def open_file_dialog(self):
-        paths = filedialog.askopenfilenames(filetypes=[("Images", "*.png *.jpg *.jpeg"), ("All", "*")])
+        home_dir = os.path.expanduser("~")
+
+        paths = filedialog.askopenfilenames(initialdir=home_dir, filetypes=[("Images", "*.png *.jpg *.jpeg"), ("All", "*")])
         if paths:
             self.images_data = []
             for p in paths:
@@ -457,72 +459,81 @@ class FileSelectorApp(ctk.CTk):
 
     # --- OCR THREAD ---
     def run_current_image_ocr(self):
-        """
-        Spustí kompletní OCR pouze pro aktuálně zobrazený obrázek.
-        """
-        if self.ocr_engine is None or self.current_index == -1:
-            return
-        
-        self.btn_ocr_current.configure(state="disabled")
-
-        # 1. Uložíme aktuální stav (pokud uživatel hýbal boxy ručně)
-        self._save_coords_from_canvas()
-
-        # 2. UI Feedback
-        self.status_label.configure(text="Skenuji aktuální snímek...")
-        self.update() # Vynutí překreslení okna, aby text nezmrznul
-
-        data = self.images_data[self.current_index]
-        path = data["path"]
-
-        try:
-            # 3. Spuštění analýzy v EasyOCR (to chvíli trvá)
-            self.ocr_engine.analyze_image(path)
-
-            # 4. Aplikace logiky pro hledání souřadnic a textu
-            # (Stejná logika jako v hromadném vlákně)
-
-            # --- PRICE ---
-            if not data["coords"]["price"]: 
-                data["coords"]["price"] = self.ocr_engine.get_price_coords()
+            """
+            Spustí kompletní OCR pouze pro aktuálně zobrazený obrázek.
+            VŽDY přepíše stará data novými.
+            """
+            if self.ocr_engine is None or self.current_index == -1:
+                return
             
-            p_text = self.ocr_engine.get_text_from_region(path, data["coords"]["price"]) if data["coords"]["price"] else ""
+            self.btn_ocr_current.configure(state="disabled")
 
-            # --- DATE ---
-            d_text = ""
-            # Zkusíme regex auto-detekci
-            if not data["coords"]["date"]:
-                found_coords, found_text = self.ocr_engine.get_date()
-                if found_coords:
-                    data["coords"]["date"] = found_coords
-                    d_text = found_text
-            
-            # Pokud regex selhal, ale máme souřadnice, přečteme region
-            if data["coords"]["date"] and not d_text:
-                d_text = self.ocr_engine.get_text_from_region(path, data["coords"]["date"])
+            # 1. Uložíme aktuální stav (pokud uživatel hýbal boxy ručně)
+            self._save_coords_from_canvas()
 
-            # --- VENDOR ---
-            if not data["coords"]["vendor"]: 
-                data["coords"]["vendor"] = self.ocr_engine.get_vendor_coords()
-            
-            v_text = self.ocr_engine.get_text_from_region(path, data["coords"]["vendor"]) if data["coords"]["vendor"] else ""
+            # 2. UI Feedback
+            self.status_label.configure(text="Skenuji aktuální snímek...")
+            self.update() 
 
-            # 5. Uložení výsledků
-            data["final_values"]["price"] = p_text
-            data["final_values"]["date"] = d_text
-            data["final_values"]["vendor"] = v_text
-            data["ocr_done"] = True
+            data = self.images_data[self.current_index]
+            path = data["path"]
 
-            # 6. Refresh GUI
-            self.show_image_on_canvas()
-            self.status_label.configure(text="OCR aktuálního snímku hotovo.")
+            try:
+                # 3. Spuštění analýzy
+                self.ocr_engine.analyze_image(path)
 
-        except Exception as e:
-            self.status_label.configure(text=f"Chyba OCR: {e}")
-            print(f"Error: {e}")
-        finally:
-            self.btn_ocr_current.configure(state="normal")
-        
+                # 4. Aplikace logiky - BEZ PODMÍNKY 'if not' (Vynucený přepis)
+
+                # --- PRICE ---
+                p_result = self.ocr_engine.get_price_coords()
+                if isinstance(p_result, tuple):
+                    data["coords"]["price"] = p_result[0]
+                    # Uložíme text, pokud existuje, jinak None
+                    data["final_values"]["price"] = p_result[1] if p_result[1] else None
+                else:
+                    data["coords"]["price"] = p_result
+                
+                # Pokud MyOCR nenašlo text ceny přímo, zkusíme ho přečíst z regionu
+                if not data["final_values"]["price"] and data["coords"]["price"]:
+                    data["final_values"]["price"] = self.ocr_engine.get_text_from_region(path, data["coords"]["price"])
+
+                # --- DATE ---
+                d_result = self.ocr_engine.get_date()
+                if isinstance(d_result, tuple):
+                    data["coords"]["date"] = d_result[0]
+                    data["final_values"]["date"] = d_result[1] if d_result[1] else None
+                else:
+                    # Ošetření, kdyby se vrátilo něco jiného
+                    data["coords"]["date"] = d_result if isinstance(d_result, list) else d_result
+
+                if not data["final_values"]["date"] and data["coords"]["date"]:
+                    data["final_values"]["date"] = self.ocr_engine.get_text_from_region(path, data["coords"]["date"])
+
+                # --- VENDOR ---
+                v_result = self.ocr_engine.get_vendor_coords()
+                if isinstance(v_result, tuple):
+                    data["coords"]["vendor"] = v_result[0]
+                    data["final_values"]["vendor"] = v_result[1] if v_result[1] else None
+                else:
+                    data["coords"]["vendor"] = v_result
+
+                if not data["final_values"]["vendor"] and data["coords"]["vendor"]:
+                    data["final_values"]["vendor"] = self.ocr_engine.get_text_from_region(path, data["coords"]["vendor"])
+
+                # 5. Uložení stavu
+                data["ocr_done"] = True
+
+                # 6. Refresh GUI
+                self.show_image_on_canvas()
+                self.status_label.configure(text="OCR aktuálního snímku hotovo.")
+
+            except Exception as e:
+                self.status_label.configure(text=f"Chyba OCR: {e}")
+                print(f"Error: {e}")
+                import traceback
+                traceback.print_exc()
+            finally:
+                self.btn_ocr_current.configure(state="normal")
 
     def start_ocr_process(self):
         if self.ocr_engine is None: return
@@ -539,70 +550,64 @@ class FileSelectorApp(ctk.CTk):
 
     
     def ocr_thread_logic(self):
-        if self.ocr_engine is None: return
+            if self.ocr_engine is None: return
 
-        errors = 0
-        total = len(self.images_data)
+            errors = 0
+            total = len(self.images_data)
 
-        for i, data in enumerate(self.images_data):
-            try: 
-                self.current_processing_status = f"OCR {i+1}/{total}..."
-                self.ocr_engine.analyze_image(data["path"])
-                self.status_label.configure(text=f"OCR {i+1}/{total}...")
-                
-                # --- AUTOMATICKÉ NASTAVENÍ SOUŘADNIC ---
-                # Pokud nemáme boxy, načteme automatické (price, date)
-                # Price
-                if not data["coords"]["price"]: data["coords"]["price"] = self.ocr_engine.get_price_coords()
+            for i, data in enumerate(self.images_data):
+                try: 
+                    self.current_processing_status = f"OCR {i+1}/{total}..."
+                    self.ocr_engine.analyze_image(data["path"])
+                    
+                    # --- PRICE ---
+                    if not data["coords"]["price"]: 
+                        res = self.ocr_engine.get_price_coords()
+                        if isinstance(res, tuple):
+                            data["coords"]["price"] = res[0]
+                            if res[1]: data["final_values"]["price"] = res[1]
+                        else:
+                            data["coords"]["price"] = res
 
-                # Date
-                if not data["coords"]["date"]: d_coords, d_text = self.ocr_engine.get_date()
+                    # --- DATE ---
+                    if not data["coords"]["date"]: 
+                        res = self.ocr_engine.get_date()
+                        if isinstance(res, tuple):
+                            data["coords"]["date"] = res[0]
+                            if res[1]: data["final_values"]["date"] = res[1]
+                        else:
+                            data["coords"]["date"] = res
 
-                if d_coords:
-                    data["coords"]["date"] = d_coords
+                    # --- VENDOR ---
+                    if not data["coords"]["vendor"]: 
+                        res = self.ocr_engine.get_vendor_coords()
+                        if isinstance(res, tuple):
+                            data["coords"]["vendor"] = res[0]
+                            if res[1]: data["final_values"]["vendor"] = res[1]
+                        else:
+                            data["coords"]["vendor"] = res
+                    
+                    # --- DOČTENÍ TEXTU (pokud chybí) ---
+                    # Price
+                    if not data["final_values"]["price"] and data["coords"]["price"]:
+                        data["final_values"]["price"] = self.ocr_engine.get_text_from_region(data["path"], data["coords"]["price"])
+                    
+                    # Date
+                    if not data["final_values"]["date"] and data["coords"]["date"]:
+                        data["final_values"]["date"] = self.ocr_engine.get_text_from_region(data["path"], data["coords"]["date"])
 
-                    data["final_values"]["date"] = d_text
+                    # Vendor
+                    if not data["final_values"]["vendor"] and data["coords"]["vendor"]:
+                        data["final_values"]["vendor"] = self.ocr_engine.get_text_from_region(data["path"], data["coords"]["vendor"])
+                    
+                    data["ocr_done"] = True
+                    self._thread_result_msg = "(+)OCR done."
 
-                # Vendor 
-                if not data["coords"]["vendor"]: v_coords, v_text = self.ocr_engine.get_vendor_coords()
-                
-                if v_coords:
-                    data["coords"]["vendor"] = v_coords
-                    data["final_values"]["vendor"] = v_text
-                
-                # --- ZÍSKÁNÍ TEXTU ---
-
-                # Date
-                if data["final_values"]["date"]:
-                    d_text = data["final_values"]["date"]
-                else:
-                    d_text = self.ocr_engine.get_text_from_region(data["path"], data["coords"]["date"]) if data["coords"]["date"] else ""
-
-                # Vendor
-                if data["final_values"]["vendor"]: v_text = data["final_values"]["vendor"]
-                else:
-                    v_text = self.ocr_engine.get_text_from_region(data["path"], data["coords"]["vendor"]) if data["coords"]["vendor"] else ""
-
-                # Price
-
-                p_text = self.ocr_engine.get_text_from_region(data["path"], data["coords"]["price"]) if data["coords"]["price"] else ""
-               
-
-
-                data["final_values"]["price"] = p_text
-                data["final_values"]["date"] = d_text
-                data["final_values"]["vendor"] = v_text
-                
-                data["ocr_done"] = True
-                self._thread_result_msg = "(+)OCR done."
-
-            except Exception as e:
-                errors += 1
-                self._thread_result_msg = f"(-)ERROR in file {data['path']}: {e}"
-        if errors == 0:
-            self._thread_result_msg = "OCR without errors."
-        else:
-            self._thread_result_msg = f"OCR completed with {errors} errors."
+                except Exception as e:
+                    errors += 1
+                    self._thread_result_msg = f"(-)ERROR in file {data['path']}: {e}"
+                    print(f"Error processing {data['path']}: {e}")
+                    
 
     def monitor_ocr_thread(self):
         if self._ocr_thread and self._ocr_thread.is_alive():
