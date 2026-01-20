@@ -148,14 +148,13 @@ def ReturnPrice(data):
         return None, ""
     
 
-
-    
-    keywords = r"(?:celkem|suma|k platbě|spolu|spolu k úhradě|k úhradě|celková částka|celkový součet|total|amount due|amount payable|total amount|sum total|grand total|invoice total|balance due|total due|total payable|total amount due|total amount payable|celkem k úhradě|částka k úhradě|částka celkem|fakturováno celkem|fakturováno k úhradě)"
-    price_pattern = r"\d[\d\s.,]*\d"
+    keywords = r"(?:celkem|suma|k platbě|spolu|spolu k úhradě|k úhradě|stka|celková částka|celkový součet|total|amount due|amount payable|total amount|sum total|grand total|invoice total|balance due|total due|total payable|total amount due|total amount payable|celkem k úhradě|částka k úhradě|částka celkem|fakturováno celkem|fakturováno k úhradě)"
+    price_pattern = r"\d[\d\s.,]*[.,]\d{2}\b"
 
     full_pattern = f"(?i){keywords}.*?({price_pattern})"
 
     keywords_only_pattern = re.compile(f"(?i){keywords}")
+    price_regex_standalone = re.compile(price_pattern)
 
     for i, item in enumerate(data):
         coords = item[0]
@@ -163,26 +162,27 @@ def ReturnPrice(data):
 
         if not isinstance(text_original, str): continue
 
-        match = re.search(full_pattern, text_original)
+        match = re.search(full_pattern, text_original.lower())
         if match:
             raw_price = match.group(1)
             final_price = _clean_price_string(raw_price)
 
-            if final_price:
+            if _clean_price_string(raw_price):
                 # Found full match with price
-                return _clean_coords_helper(coords), str(final_price)
+                return _clean_coords_helper(coords), raw_price
             
         # If only keywords matched, look at next line for price    
-        if keywords_only_pattern.search(text_original):
+        if keywords_only_pattern.search(text_original.lower()):
             if i +1 < len(data):
                 next_item = data[i+1]
                 next_text = next_item[1]
 
-                if any (char.isdigit() for char in next_text):
+                price_match = price_regex_standalone.search(next_text)
 
-                    cleaned_next = _clean_price_string(next_text)
-                    if cleaned_next:
-                        return _clean_coords_helper(next_item[0]), str(cleaned_next)
+                if price_match:
+                    raw_next = price_match.group(0)
+                    if _clean_price_string(raw_next):
+                        return _clean_coords_helper(next_item[0]), raw_next
     return None, ""
 
 
