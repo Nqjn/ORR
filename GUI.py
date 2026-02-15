@@ -7,10 +7,7 @@ import cv2
 import tempfile
 import math
 import threading
-import cv2
 import numpy as np
-import math
-
 from typing import Any, List, Optional
 
 # --- IMPORT MyOCR ---
@@ -22,6 +19,7 @@ except ImportError:
 
 ctk.set_appearance_mode("System")
 ctk.set_default_color_theme("blue")
+
 
 class FileSelectorApp(ctk.CTk):
     def __init__(self):
@@ -468,7 +466,7 @@ class FileSelectorApp(ctk.CTk):
             
             self.btn_ocr_current.configure(state="disabled")
 
-            # 1. Uložíme aktuální stav (pokud uživatel hýbal boxy ručně)
+            # 1. Save current entries and coords
             self._save_coords_from_canvas()
 
             # 2. UI Feedback
@@ -479,10 +477,10 @@ class FileSelectorApp(ctk.CTk):
             path = data["path"]
 
             try:
-                # 3. Spuštění analýzy
+                # 3. Start analysis
                 self.ocr_engine.analyze_image(path)
 
-                # 4. Aplikace logiky - BEZ PODMÍNKY 'if not' (Vynucený přepis)
+                # 4. Aplication of results
 
                 # --- PRICE ---
                 p_result = self.ocr_engine.get_price_coords()
@@ -493,7 +491,7 @@ class FileSelectorApp(ctk.CTk):
                 else:
                     data["coords"]["price"] = p_result
                 
-                # Pokud MyOCR nenašlo text ceny přímo, zkusíme ho přečíst z regionu
+                # If MyOCR did not find the price text directly, try to read it from the region
                 if not data["final_values"]["price"] and data["coords"]["price"]:
                     data["final_values"]["price"] = self.ocr_engine.get_text_from_region(path, data["coords"]["price"])
 
@@ -503,7 +501,7 @@ class FileSelectorApp(ctk.CTk):
                     data["coords"]["date"] = d_result[0]
                     data["final_values"]["date"] = d_result[1] if d_result[1] else None
                 else:
-                    # Ošetření, kdyby se vrátilo něco jiného
+                    # Handling cases where something else is returned
                     data["coords"]["date"] = d_result if isinstance(d_result, list) else d_result
 
                 if not data["final_values"]["date"] and data["coords"]["date"]:
@@ -520,7 +518,7 @@ class FileSelectorApp(ctk.CTk):
                 if not data["final_values"]["vendor"] and data["coords"]["vendor"]:
                     data["final_values"]["vendor"] = self.ocr_engine.get_text_from_region(path, data["coords"]["vendor"])
 
-                # 5. Uložení stavu
+                # 5. Save the state
                 data["ocr_done"] = True
 
                 # 6. Refresh GUI
@@ -587,7 +585,7 @@ class FileSelectorApp(ctk.CTk):
                         else:
                             data["coords"]["vendor"] = res
                     
-                    # --- DOČTENÍ TEXTU (pokud chybí) ---
+                    
                     # Price
                     if not data["final_values"]["price"] and data["coords"]["price"]:
                         data["final_values"]["price"] = self.ocr_engine.get_text_from_region(data["path"], data["coords"]["price"])
@@ -645,14 +643,14 @@ class FileSelectorApp(ctk.CTk):
         self.status_label.configure(text="Probíhá analýza náklonu...")
         self.update()
 
-        # 1. Zavoláme logiku narovnání
+        # 1. Call deskew logic
         new_image, changed = deskew_image_logic(self.original_image)
         
         if not changed:
             self.status_label.configure(text="Obrázek je rovný.")
             return
 
-        # 2. Uložení do TEMP souboru (Nutné pro OCR!)
+        # 2. Save to TEMP file
         try:
             fd, temp_path = tempfile.mkstemp(suffix=".png")
             os.close(fd)
@@ -660,16 +658,16 @@ class FileSelectorApp(ctk.CTk):
             new_image.save(temp_path)
             print(f"[System] Narovnaný soubor uložen: {temp_path}")
 
-            # 3. Aktualizace dat v aplikaci
+            # 3. actualization in app data
             self.original_image = new_image
             self.images_data[self.current_index]["image"] = new_image
             self.images_data[self.current_index]["path"] = temp_path # Podstrčíme novou cestu
             
-            # Reset boxů (staré souřadnice už nesedí)
+            # Reset boxes (because coordinates do not match after deskew)
             self.images_data[self.current_index]["coords"] = {"price": None, "date": None, "vendor": None}
             self.images_data[self.current_index]["ocr_done"] = False
             
-            # Překreslení
+            # Redraw
             self.show_image_on_canvas()
             self.status_label.configure(text=f"Narovnáno. Spusťte OCR.")
             
@@ -680,7 +678,7 @@ def deskew_image_logic(pil_image):
     """
     Narovná obrázek a zvětší plátno (Verze bez chyb Pylance).
     """
-    # 1. Konverze PIL -> OpenCV
+    # 1. Convert to OpenCV format
     img = np.array(pil_image)
     if len(img.shape) == 3:
         img = img[:, :, ::-1].copy()
@@ -688,10 +686,10 @@ def deskew_image_logic(pil_image):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     edges = cv2.Canny(gray, 50, 150, apertureSize=3)
     
-    # Detekce čar
+    # Line detection
     lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=100, minLineLength=100, maxLineGap=20)
     
-    # Pokud se nic nenašlo, vracíme původní
+    # If nothing found, return original
     if lines is None: 
         return pil_image, False
 
@@ -708,7 +706,7 @@ def deskew_image_logic(pil_image):
         
         angle_deg = math.degrees(math.atan2(y2 - y1, x2 - x1))
         
-        # Filtr úhlů
+        #  Filtration degrees
         if -45 < angle_deg < 45:
             angles.append(angle_deg)
 
@@ -721,7 +719,7 @@ def deskew_image_logic(pil_image):
     if abs(final_angle) < 0.1: 
         return pil_image, False
 
-    # === VÝPOČET NOVÉ VELIKOSTI ===
+    # === CALCULATION OF NEW SIZE ===
     (h, w) = img.shape[:2]
     center = (w // 2, h // 2)
     

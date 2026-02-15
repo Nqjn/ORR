@@ -74,7 +74,7 @@ class MyOCR:
     
     def get_text_from_region(self, path: str, coords: List[List[int]]) -> str:
         """
-        Provede OCR pouze na vybraném výřezu obrázku definovaném souřadnicemi.
+        Execute OCR on a specific region of the image defined by coordinates.
         
         Args:
             path (str): Path to the image file.
@@ -223,37 +223,37 @@ def ReturnVendor(data):
     legal_entities = ['s.r.o', 'a.s', 'spol', 'spol. s r.o', 'k.s', 'gmbh']
 
     keywords = [
-    # Potraviny a supermarkety
+    # Grocery stores and supermarkets
     'tesco', 'kaufland', 'lidl', 'aldi', 'billa', 'albert', 'penny', 'globus', 
     'makro', 'coop', 'hruska', 'norma', 'zabka', 'terno', 'tamda', 'flop', 
     'jip', 'enapo', 'cba', 
 
-    # Drogerie a lékárny
+    # Drugstores and pharmacies
     'dm drogerie', 'rossmann', 'teta', 'dr.max', 'benu', 'pilulka', 'drmax',
 
-    # Hobby markety, nábytek a zahrada
+    # Hobby markets, furniture and garden
     'obi', 'hornbach', 'bauhaus', 'baumax', 'uni hobby', 'ikea', 'jysk', 
     'xxllutz', 'mobelix', 'siko', 'mountfield', 'hecht', 'decodom', 'asko',
 
-    # Elektro
+    # Electronic
     'alza', 'czc', 'datart', 'electro world', 'planeo', 'okay', 'smarty', 
     'istyle', 'mironet', 'tsbohemia', 
 
-    # Oblečení, obuv a sport
+    # Clothing and sport
     'decathlon', 'sportisimo', 'h&m', 'c&a', 'zara', 'pepco', 'kik', 'takko', 
     'action', 'tedi', 'new yorker', 'deichmann', 'ccc', 'bata', 'humanic', 
     'a3 sport', 'intersport', 'alpine pro',
 
-    # Čerpací stanice (často na účtenkách)
+    # Oils and gas stations
     'shell', 'omv', 'benzina', 'orlen', 'mol', 'eurooil', 'tank ono', 
     'robin oil', 'km prona',
 
-    # Fast food a kavárny
+    # Fast food and cafes
     'mcdonald', 'kfc', 'burger king', 'starbucks', 'costa coffee', 
     'bageterie boulevard', 'paul', 'ugova cerstva stava'
     ]
 
-    # 1. Priorita: Přímé shody s klíčovými slovy (známé řetězce)
+    # 1. Priority: Direct matches with keywords (known chains)
 
     strict_keywords = [k for k in keywords if len(k) <= 3]
     lossy_keywords = [k for k in keywords if len(k) > 3]
@@ -281,52 +281,52 @@ def ReturnVendor(data):
                 return _clean_coords_helper(res[0]), normalized_brand
     
         
-    # 2. Priorita: Hledání právních forem (s.r.o., a.s., spol., etc.)
+    # 2. Priority: Searching for legal entities (s.r.o., a.s., spol., etc.)
     pattern_str = make_fuzzy_entity_regex(legal_entities)
     pattern = re.compile(pattern_str, re.IGNORECASE)
 
     for i in range(len(data)):
         item = data[i]
-        text_original = item[1] # Celý text řádku, např: "BILLA BILLA SPOL , S R.o ..."
+        text_original = item[1] # Entire line text, e.g., "BILLA BILLA SPOL , S R.o ..."
         
-        # Použijeme search, který vrátí "match object"
+        # Use search, which returns a "match object"
         match = pattern.search(text_original)
         
         if match:
-            # Získáme index, kde začíná nalezené klíčové slovo (např. kde začíná "SPOL")
+            # Get the index where the found keyword starts (e.g., where "SPOL" starts)
             start_index = match.start()
             
-            # Vezmeme text PŘED tímto indexem
+            # Take the text BEFORE this index
             vendor_candidate = text_original[:start_index].strip()
             
-            # KROK A: Je před 's.r.o.' nějaký text na stejném řádku?
-            if len(vendor_candidate) > 1: # >1 aby to nebyl jen šum
+            # STEP A: Is there any text before 's.r.o.' on the same line?
+            if len(vendor_candidate) > 1: # >1 to avoid just noise
                 
                 return  _clean_coords_helper(item[0]), vendor_candidate 
                 
-            # KROK B: Na řádku před s.r.o nic není (s.r.o je na začátku řádku)
+            # STEP B: There is nothing on the line before s.r.o (s.r.o is at the beginning of the line)
             elif i > 0:
-                # Vrátíme předchozí řádek ze seznamu
+                # Return the previous line from the list
                 return _clean_coords_helper(data[i-1][0]), data[i-1][1]
 
-    # 3. Priorita: Klíčové slovo "Dodavatel"
+    # 3. Priority: Keyword "Supplier" or "Vendor" and take the next line
     for i, item in enumerate(data):
         text_lower = item[1].lower()
         if 'dodavatel' in text_lower or 'prodávající' in text_lower:
-            # Pokud řádek obsahuje víc textu (např. "Dodavatel: Tesco a.s."), vrátíme ho
+            # If the line contains more text (e.g., "Supplier: Tesco a.s."), return it
             if len(item[1]) > 12: 
                 return _clean_coords_helper(item[0]), item[1]
-            # Pokud je to jen nadpis "Dodavatel:", vrátíme NÁSLEDUJÍCÍ řádek
+            # If it's just the heading "Supplier:", return the NEXT line
             elif i + 1 < len(data):
                 return _clean_coords_helper(data[i+1][0]), data[i+1][1]
 
 
-    # 4. Priorita: Najít IČO/DIČ a vzít řádek PŘED ním
+    # 4. Priority: Find IČO/DIČ and take the line BEFORE it
     for i, item in enumerate(data):
         text_lower = item[1].lower()
-        # Hledáme patterny IČ/DIČ
+        # Searching for IČ/DIČ patterns
         if 'ič:' in text_lower or 'ičo:' in text_lower or 'dič:' in text_lower or 'cz' in text_lower:
-            # Pokud nejsme na úplně prvním řádku, vrátíme ten předchozí
+            # If we are not on the very first line, return the previous one
             if i > 0:
                 return _clean_coords_helper(data[i-1][0]), data[i-1][1]
 
@@ -361,14 +361,14 @@ def make_fuzzy_entity_regex(terms):
         str: Compiled regex pattern string.
     """
     replacements = {
-        'o': '[o0]',       # Písmeno o a nula
+        'o': '[o0]',       # Letter o and zero
         '0': '[o0]',       
-        'i': '[i1l|]',     # i, jedna, malé L, svislítko
+        'i': '[i1l|]',     # i, one, lowercase L, vertical bar
         'l': '[i1l|]',
         '1': '[i1l|]',
-        's': '[s5]',       # s a pětka
-        'z': '[z2]',       # z a dvojka
-        'b': '[b8]',       # b a osmička
+        's': '[s5]',       # s and five         
+        'z': '[z2]',       # z and two
+        'b': '[b8]',       # b and eight
     }
 
     patterns = []
@@ -392,19 +392,18 @@ def _clean_price_string(price_str: str) -> Optional[float]:
     if not price_str:
         return None
 
-    # 1. Odstraníme vše kromě číslic, čárky a tečky
-    # (Odstraní to 'Kč', 'EUR', písmena, znaky měny)
+    # 1. Remove everything except digits, commas, and dots
+    # (This removes 'Kč', 'EUR', letters, currency symbols)
     clean = re.sub(r"[^\d.,]", "", price_str)
     
-    # 2. Nahrazení desetinné čárky tečkou
+    # 2. Replace decimal comma with dot
     if "," in clean:
         clean = clean.replace(",", ".")
     
-    # 3. Ošetření více teček (např. 1.200.50 -> 1200.50)
-    # Logika: Všechny tečky kromě té poslední jsou oddělovače tisíců -> smazat
+    # 3. Handle multiple dots (e.g., 1.200.50 -> 1200.50)
+    # Logic: All dots except the last one are thousand separators -> remove them
     if clean.count(".") > 1:
         parts = clean.split(".")
-        # Spojíme vše kromě posledního dílu, pak přidáme poslední díl s tečkou
         clean = "".join(parts[:-1]) + "." + parts[-1]
 
     try:
