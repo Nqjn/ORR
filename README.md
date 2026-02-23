@@ -19,7 +19,7 @@ Tento projekt byl vytvořen jako maturitní práce na Gymnáziu Matyáše Lercha
 Stáhněte si zdrojové kódy projektu do svého lokálního adresáře.
 
 ### 2. Instalace závislostí
-Pro zajištění stability jsou v souboru `requirements.txt` fixovány konkrétní verze knihoven (version pinning). Instalaci provedete příkazem:
+Pro zajištění stability jsou v souboru `requirements.txt` fixovány konkrétní verze knihoven. Instalaci provedete příkazem:
 
 ```bash
 pip install -r requirements.txt
