@@ -24,6 +24,8 @@ ctk.set_default_color_theme("blue")
 class FileSelectorApp(ctk.CTk):
     def __init__(self):
         super().__init__()
+
+
         
         # --- DATA ---
         self.images_data: List[dict] = [] 
@@ -49,6 +51,15 @@ class FileSelectorApp(ctk.CTk):
 
         self.title("OCR - Editor s korekturou")
         self.geometry("1200x800")
+
+        try:
+
+            icon_image = Image.open("images/ikona_aplikace.png") 
+            self.icon_photo = ImageTk.PhotoImage(icon_image)
+
+            self.wm_iconphoto(False, self.icon_photo) # type: ignore
+        except Exception as e:
+            print(f"Ikona nebyla nalezena: {e}")
 
 
         self.ocr_engine = None

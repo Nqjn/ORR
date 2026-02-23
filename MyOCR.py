@@ -309,7 +309,7 @@ def ReturnVendor(data):
                 # Return the previous line from the list
                 return _clean_coords_helper(data[i-1][0]), data[i-1][1]
 
-    # 3. Priority: Keyword "Supplier" or "Vendor" and take the next line
+    # 3. Priority: Keyword "dodávající" or "prod" and take the next line
     for i, item in enumerate(data):
         text_lower = item[1].lower()
         if 'dodavatel' in text_lower or 'prodávající' in text_lower:
