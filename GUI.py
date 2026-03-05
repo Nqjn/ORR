@@ -28,23 +28,23 @@ class FileSelectorApp(ctk.CTk):
 
         
         # --- DATA ---
-        self.images_data: List[dict] = [] 
-        self.current_index = -1 
+        self.images_data: List[dict] = []
+        self.current_index = -1
 
-        self.original_image = None 
+        self.original_image = None
         self._tk_image_ref = None
         self.scale_ratio = 1.0
         
-        # Uchováváme reference na widgety (aby šly mazat a číst)
-        self.active_widgets = {} # { "price": {...}, "date": {...}, "vendor": {...} }
+        # Active widgets for the current image (price, date, vendor entries)
+        self.active_widgets = {}  # { "price": {...}, "date": {...}, "vendor": {...} }
         
         self.drag_data = {
             "x": 0, "y": 0, "item": None, "mode": None, "group_tag": None, "corner": None
         }
         
-        self.final_output_data = None 
+        self.final_output_data = None
         self._thread_result_msg = ""
-        self._ocr_thread = None 
+        self._ocr_thread = None
 
         # --- GUI SETUP ---
 
@@ -67,7 +67,7 @@ class FileSelectorApp(ctk.CTk):
             try: self.ocr_engine = MyOCR()
             except: pass
 
-        # === LEVÝ PANEL ===
+        # === LEFT PANEL ===
         self.control_frame = ctk.CTkFrame(self, width=250)
         self.control_frame.pack(side="left", fill="y", padx=10, pady=10)
         
@@ -80,7 +80,7 @@ class FileSelectorApp(ctk.CTk):
         self.path_label = ctk.CTkLabel(self.control_frame, text="...", text_color="gray", wraplength=230)
         self.path_label.pack(pady=5)
 
-        # Navigace
+        # CREATE NAVIGATION BUTTONS
         self.nav_frame = ctk.CTkFrame(self.control_frame, fg_color="transparent")
         self.nav_frame.pack(pady=10)
         self.btn_prev = ctk.CTkButton(self.nav_frame, text="< Zpět", width=80, command=lambda: self.change_image(-1), state="disabled")
@@ -90,7 +90,7 @@ class FileSelectorApp(ctk.CTk):
 
         ctk.CTkLabel(self.control_frame, text="Otočení:", font=("Arial", 14, "bold")).pack(pady=(15, 5))
         
-        # Vytvoříme malý rámeček, aby byla tlačítka vedle sebe
+        # CREATE ROTATION BUTTONS
         self.rot_frame = ctk.CTkFrame(self.control_frame, fg_color="transparent")
         self.rot_frame.pack(pady=5)
         
@@ -134,24 +134,24 @@ class FileSelectorApp(ctk.CTk):
         self.status_label = ctk.CTkLabel(self.control_frame, text="", wraplength=230)
         self.status_label.pack(pady=5)
 
-        # Manuální nástroje
+        # MANUAL BOX CONTROLS
         self.frame_manual = ctk.CTkFrame(self.control_frame)
         self.frame_manual.pack(pady=20, fill="x", padx=5)
         ctk.CTkLabel(self.frame_manual, text="Přidat oblast:", font=("Arial", 12, "bold")).pack(pady=5)
         
-        # TLAČÍTKA PRO PŘIDÁNÍ OBLASTÍ
+        # BUTTONS FOR MANUAL BOX CREATION
         ctk.CTkButton(self.frame_manual, text="+ Cena", fg_color="red", 
                       command=lambda: self.add_manual_box("price", "red")).pack(pady=5, padx=5, fill="x")
         ctk.CTkButton(self.frame_manual, text="+ Datum", fg_color="blue", 
                       command=lambda: self.add_manual_box("date", "blue")).pack(pady=5, padx=5, fill="x")
-        # NOVÉ TLAČÍTKO PRO PRODEJCE
+        # Vendor button
         ctk.CTkButton(self.frame_manual, text="+ Název (Prodejce)", fg_color="green", 
                       command=lambda: self.add_manual_box("vendor", "green")).pack(pady=5, padx=5, fill="x")
 
         self.finish_all_btn = ctk.CTkButton(self.control_frame, text="Uložit vše do Excelu", command=self.finalize_and_close, fg_color="darkblue")
         self.finish_all_btn.pack(side="bottom", pady=20)
 
-        # === PRAVÝ PANEL (CANVAS) ===
+        # === RIGHT PANEL (CANVAS) ===
         self.image_frame = ctk.CTkFrame(self)
         self.image_frame.pack(side="right", fill="both", expand=True, padx=10, pady=10)
 
@@ -159,14 +159,14 @@ class FileSelectorApp(ctk.CTk):
         self.canvas.pack(fill="both", expand=True, padx=0, pady=0)
         self.text_id = self.canvas.create_text(0, 0, text="Náhled", fill="gray", font=("Arial", 16))
 
-        # Binds
+        # Event bindings
         self.canvas.bind("<Configure>", self.on_resize)
         self.canvas.bind("<Button-1>", self.on_drag_start)
         self.canvas.bind("<B1-Motion>", self.on_drag_motion)
         self.canvas.bind("<ButtonRelease-1>", self.on_drag_stop)
         self.canvas.bind("<Motion>", self.on_mouse_move)
 
-    # --- CANVAS & ENTRY LOGIC ---
+    # --- CANVAS & TEXT ENTRY LOGIC ---
 
     def on_resize(self, event):
         self.canvas.coords(self.text_id, self.canvas.winfo_width()/2, self.canvas.winfo_height()/2)
@@ -177,11 +177,11 @@ class FileSelectorApp(ctk.CTk):
     def show_image_on_canvas(self):
         if self.original_image is None: return
         
-        # 1. Vyčistit vše
-        self.active_widgets = {} 
+        # 1. Clear canvas and active widgets
+        self.active_widgets = {}
         self.canvas.delete("all")
 
-        # 2. Vykreslit obrázek
+        # 2. Calculate scale and show image
         cw, ch = self.canvas.winfo_width(), self.canvas.winfo_height()
         if cw < 10 or ch < 10: return
         img_w, img_h = self.original_image.size
@@ -192,23 +192,23 @@ class FileSelectorApp(ctk.CTk):
         self._tk_image_ref = ImageTk.PhotoImage(resized_pil)
         self.canvas.create_image(0, 0, image=self._tk_image_ref, anchor="nw")
 
-        # 3. Vykreslit boxy a widgety
+        # 3. Create interactive boxes and text entries from current data
         if self.current_index >= 0:
             data = self.images_data[self.current_index]
             
-            # --- CENA (RED) ---
+            # --- PRICE (RED) ---
             if data["coords"].get("price"):
                 self.create_interactive_box(data["coords"]["price"], "red", "price")
                 val = data["final_values"].get("price")
                 self.create_text_entry("price", data["coords"]["price"], val, "red")
 
-            # --- DATUM (BLUE) ---
+            # --- DATE (BLUE) ---
             if data["coords"].get("date"):
                 self.create_interactive_box(data["coords"]["date"], "blue", "date")
                 val = data["final_values"].get("date")
                 self.create_text_entry("date", data["coords"]["date"], val, "blue")
 
-            # --- PRODEJCE (GREEN) ---
+            # --- VENDOR (GREEN) ---
             if data["coords"].get("vendor"):
                 self.create_interactive_box(data["coords"]["vendor"], "green", "vendor")
                 val = data["final_values"].get("vendor")
@@ -293,9 +293,9 @@ class FileSelectorApp(ctk.CTk):
         else:
             self.status_label.configure(text="Nejprve nahrajte obrázek.")
 
-    # --- INTERAKCE (S OPRAVOU KLIKNUTÍ DOVNITŘ) ---
+    # --- DRAG INTERACTION ---
     def _get_target_at_position(self, x, y, threshold=10):
-        # 1. Rohy (resize)
+        # 1. Corner handles (resize)
         items = self.canvas.find_overlapping(x-threshold, y-threshold, x+threshold, y+threshold)
         for item in items:
             tags = self.canvas.gettags(item)
@@ -305,7 +305,7 @@ class FileSelectorApp(ctk.CTk):
                 if group and corner:
                     return group, "RESIZE", corner
 
-        # 2. Vnitřek (move)
+        # 2. Inside rectangle (move)
         rects = self.canvas.find_withtag("rect")
         for r_id in reversed(rects):
             x1, y1, x2, y2 = self.canvas.coords(r_id)
@@ -366,14 +366,14 @@ class FileSelectorApp(ctk.CTk):
         self.canvas.configure(cursor="")
 
     def rotate_current_image(self, angle):
-        """Manuální otočení (Vlevo/Vpravo) a uložení do tempu pro OCR."""
+        """Manually rotate image (left/right) and save to temp file for OCR."""
         if self.original_image is None or self.current_index == -1:
             return
             
-        # 1. Otočení v paměti (expand=True zvětší plátno, aby se obrázek neořízl)
+        # 1. Rotate the original image
         self.original_image = self.original_image.rotate(angle, expand=True)
         
-        # 2. Uložení do TEMP souboru (Nutné, aby OCR vidělo otočenou verzi)
+        # 2. Save to a temp file (so OCR can read the rotated version)
         try:
             fd, temp_path = tempfile.mkstemp(suffix=".png")
             os.close(fd)
@@ -381,15 +381,15 @@ class FileSelectorApp(ctk.CTk):
             self.original_image.save(temp_path)
             print(f"[System] Otočený soubor uložen: {temp_path}")
 
-            # 3. Aktualizace dat v aplikaci
+            # 3. Update app data
             self.images_data[self.current_index]["image"] = self.original_image
             self.images_data[self.current_index]["path"] = temp_path
             
-            # Reset boxů (protože po otočení nesedí souřadnice)
+            # Reset boxes (coordinates no longer valid after rotation)
             self.images_data[self.current_index]["coords"] = {"price": None, "date": None, "vendor": None}
             self.images_data[self.current_index]["ocr_done"] = False
             
-            # Překreslení
+            # Redraw
             self.show_image_on_canvas()
             self.status_label.configure(text=f"Otočeno o {angle}°.")
             
@@ -408,7 +408,7 @@ class FileSelectorApp(ctk.CTk):
                 if img:
                     self.images_data.append({
                         "path": p, "image": img, 
-                        # INIT s klíčem 'vendor'
+                        # Initialize with empty vendor key
                         "coords": {"price": None, "date": None, "vendor": None}, 
                         "final_values": {"price": None, "date": None, "vendor": None},
                         "ocr_done": False
@@ -469,8 +469,8 @@ class FileSelectorApp(ctk.CTk):
     # --- OCR THREAD ---
     def run_current_image_ocr(self):
             """
-            Spustí kompletní OCR pouze pro aktuálně zobrazený obrázek.
-            VŽDY přepíše stará data novými.
+            Runs a complete OCR only for the currently displayed image.
+            ALWAYS overwrites old data with new data.
             """
             if self.ocr_engine is None or self.current_index == -1:
                 return
@@ -497,12 +497,12 @@ class FileSelectorApp(ctk.CTk):
                 p_result = self.ocr_engine.get_price_coords()
                 if isinstance(p_result, tuple):
                     data["coords"]["price"] = p_result[0]
-                    # Uložíme text, pokud existuje, jinak None
+                    # Store text if available, otherwise None
                     data["final_values"]["price"] = p_result[1] if p_result[1] else None
                 else:
                     data["coords"]["price"] = p_result
                 
-                # If MyOCR did not find the price text directly, try to read it from the region
+                # If MyOCR did not find price text directly, try reading from the region
                 if not data["final_values"]["price"] and data["coords"]["price"]:
                     data["final_values"]["price"] = self.ocr_engine.get_text_from_region(path, data["coords"]["price"])
 
@@ -512,7 +512,6 @@ class FileSelectorApp(ctk.CTk):
                     data["coords"]["date"] = d_result[0]
                     data["final_values"]["date"] = d_result[1] if d_result[1] else None
                 else:
-                    # Handling cases where something else is returned
                     data["coords"]["date"] = d_result if isinstance(d_result, list) else d_result
 
                 if not data["final_values"]["date"] and data["coords"]["date"]:
@@ -529,10 +528,10 @@ class FileSelectorApp(ctk.CTk):
                 if not data["final_values"]["vendor"] and data["coords"]["vendor"]:
                     data["final_values"]["vendor"] = self.ocr_engine.get_text_from_region(path, data["coords"]["vendor"])
 
-                # 5. Save the state
+                # 5. Mark as processed
                 data["ocr_done"] = True
 
-                # 6. Refresh GUI
+                # 6. Refresh the GUI
                 self.show_image_on_canvas()
                 self.status_label.configure(text="OCR aktuálního snímku hotovo.")
 
@@ -623,7 +622,7 @@ class FileSelectorApp(ctk.CTk):
             if hasattr(self, 'current_processing_status'):
                 self.status_label.configure(text=self.current_processing_status)
 
-                self.after(100, self.monitor_ocr_thread)
+            self.after(100, self.monitor_ocr_thread)
         else:
             self.progress_bar.stop(); self.progress_bar.pack_forget()
             self.status_label.configure(text=self._thread_result_msg)
@@ -639,7 +638,7 @@ class FileSelectorApp(ctk.CTk):
                 "filepath": item["path"],
                 "price_text": item["final_values"]["price"],
                 "date_text": item["final_values"]["date"],
-                "vendor_text": item["final_values"]["vendor"] # Export prodejce
+                "vendor_text": item["final_values"]["vendor"]  # Export vendor name
             })
         self.final_output_data = export_list
         self.destroy()
@@ -647,7 +646,7 @@ class FileSelectorApp(ctk.CTk):
     
 
     def perform_auto_deskew(self):
-        """Narrowing image automatically."""
+        """Automatically straighten a skewed image."""
         if self.original_image is None or self.current_index == -1:
             return
 
@@ -661,7 +660,7 @@ class FileSelectorApp(ctk.CTk):
             self.status_label.configure(text="Obrázek je rovný.")
             return
 
-        # 2. Save to TEMP file
+        # 2. Save to temp file
         try:
             fd, temp_path = tempfile.mkstemp(suffix=".png")
             os.close(fd)
@@ -669,12 +668,12 @@ class FileSelectorApp(ctk.CTk):
             new_image.save(temp_path)
             print(f"[System] Narovnaný soubor uložen: {temp_path}")
 
-            # 3. actualization in app data
+            # 3. Update app data
             self.original_image = new_image
             self.images_data[self.current_index]["image"] = new_image
-            self.images_data[self.current_index]["path"] = temp_path # Podstrčíme novou cestu
+            self.images_data[self.current_index]["path"] = temp_path  # Swap in new path
             
-            # Reset boxes (because coordinates do not match after deskew)
+            # Reset boxes (coordinates no longer valid after deskew)
             self.images_data[self.current_index]["coords"] = {"price": None, "date": None, "vendor": None}
             self.images_data[self.current_index]["ocr_done"] = False
             
@@ -687,7 +686,10 @@ class FileSelectorApp(ctk.CTk):
 
 def deskew_image_logic(pil_image):
     """
-    Narovná obrázek a zvětší plátno (Verze bez chyb Pylance).
+    Straighten a skewed image by detecting dominant line angles.
+
+    Returns:
+        tuple: (corrected_image, was_changed_bool)
     """
     # 1. Convert to OpenCV format
     img = np.array(pil_image)
@@ -700,7 +702,7 @@ def deskew_image_logic(pil_image):
     # Line detection
     lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=100, minLineLength=100, maxLineGap=20)
     
-    # If nothing found, return original
+    # If no lines found, return original
     if lines is None: 
         return pil_image, False
 
@@ -710,14 +712,14 @@ def deskew_image_logic(pil_image):
     cleaned_lines = lines[:, 0]
 
     for x1, y1, x2, y2 in cleaned_lines:
-        # Převedení na standardní int (pro jistotu)
+        # Convert to standard int for safety
         x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
 
-        if x2 == x1: continue # Ochrana dělení nulou
+        if x2 == x1: continue  # Avoid division by zero
         
         angle_deg = math.degrees(math.atan2(y2 - y1, x2 - x1))
         
-        #  Filtration degrees
+        # Filter extreme angles
         if -45 < angle_deg < 45:
             angles.append(angle_deg)
 
@@ -730,7 +732,7 @@ def deskew_image_logic(pil_image):
     if abs(final_angle) < 0.1: 
         return pil_image, False
 
-    # === CALCULATION OF NEW SIZE ===
+    # === Calculate new canvas size ===
     (h, w) = img.shape[:2]
     center = (w // 2, h // 2)
     

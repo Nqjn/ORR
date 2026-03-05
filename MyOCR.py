@@ -1,16 +1,118 @@
 import easyocr
-import os 
-from PIL import Image, ImageOps
+import os
+from PIL import Image, ImageOps, ImageEnhance, ImageFilter
 import re
 import numpy as np
-from typing import List, Any, Optional
+from typing import List, Any, Optional, Tuple
+
+
+# ==========================================
+# PRECOMPILED REGEX PATTERNS (module-level)
+# ==========================================
+
+# --- Price patterns ---
+_PRICE_KEYWORDS = re.compile(
+    r"(?:celkem|suma|k platbě|spolu k úhradě|k úhradě"
+    r"|celková částka|celkový součet"
+    r"|total|amount due|amount payable|total amount|sum total"
+    r"|grand total|invoice total|balance due|total due|total payable"
+    r"|celkem k úhradě|částka k úhradě|částka celkem"
+    r"|fakturováno celkem|fakturováno k úhradě)",
+    re.IGNORECASE,
+)
+
+_PRICE_NUMBER = re.compile(r"\d[\d\s.,]*[.,]\d{2}\b")
+
+_PRICE_FULL = re.compile(
+    r"(?:celkem|suma|k platbě|spolu k úhradě|k úhradě"
+    r"|celková částka|celkový součet"
+    r"|total|amount due|amount payable|total amount|sum total"
+    r"|grand total|invoice total|balance due|total due|total payable"
+    r"|celkem k úhradě|částka k úhradě|částka celkem"
+    r"|fakturováno celkem|fakturováno k úhradě)"
+    r".*?(\d[\d\s.,]*[.,]\d{2}\b)",
+    re.IGNORECASE,
+)
+
+# Lines containing these words are NOT the final total (tax, discount, …)
+_PRICE_BLACKLIST = re.compile(
+    r"(?:dph|daň|sleva|záloha|tax|vat|discount|subtotal|mezisoučet)",
+    re.IGNORECASE,
+)
+
+# --- Date patterns (precompiled) ---
+_DATE_PATTERNS = [
+    re.compile(r"\b\d{1,2}\s*[.,]\s*\d{1,2}\s*[.,]\s*\d{2,4}"),   # DD.MM.YYYY
+    re.compile(r"\b\d{1,2}\s*[-/]\s*\d{1,2}\s*[-/]\s*\d{2,4}"),    # DD-MM-YYYY
+    re.compile(r"\b\d{4}\s*[.\-/]\s*\d{1,2}\s*[.\-/]\s*\d{1,2}"),  # YYYY-MM-DD
+    re.compile(r"\b\d{1,2}\s+\d{1,2}\s+\d{4}"),                     # Spaced
+]
+
+_DATE_KEYWORDS = re.compile(
+    r"(?:datum|dne|date|den vystavení|vystaveno|dat\.|day)",
+    re.IGNORECASE,
+)
+
+# --- Vendor patterns (precompiled) ---
+_VENDOR_KNOWN_BRANDS = [
+    # Grocery stores and supermarkets
+    'tesco', 'kaufland', 'lidl', 'aldi', 'billa', 'albert', 'penny', 'globus',
+    'makro', 'coop', 'hruska', 'norma', 'zabka', 'terno', 'tamda', 'flop',
+    'jip', 'enapo', 'cba',
+    # Drugstores and pharmacies
+    'dm drogerie', 'rossmann', 'teta', 'dr.max', 'benu', 'pilulka', 'drmax',
+    # Hobby markets, furniture and garden
+    'obi', 'hornbach', 'bauhaus', 'baumax', 'uni hobby', 'ikea', 'jysk',
+    'xxllutz', 'mobelix', 'siko', 'mountfield', 'hecht', 'decodom', 'asko',
+    # Electronics
+    'alza', 'czc', 'datart', 'electro world', 'planeo', 'okay', 'smarty',
+    'istyle', 'mironet', 'tsbohemia',
+    # Clothing and sport
+    'decathlon', 'sportisimo', 'h&m', 'c&a', 'zara', 'pepco', 'kik', 'takko',
+    'action', 'tedi', 'new yorker', 'deichmann', 'ccc', 'bata', 'humanic',
+    'a3 sport', 'intersport', 'alpine pro',
+    # Gas stations
+    'shell', 'omv', 'benzina', 'orlen', 'mol', 'eurooil', 'tank ono',
+    'robin oil', 'km prona',
+    # Fast food and cafes
+    'mcdonald', 'kfc', 'burger king', 'starbucks', 'costa coffee',
+    'bageterie boulevard', 'paul', 'ugova cerstva stava',
+]
+
+# Short brands need word-boundary match; long brands can use substring
+_VENDOR_SHORT_BRANDS = sorted(
+    [k for k in _VENDOR_KNOWN_BRANDS if len(k) <= 3], key=len, reverse=True
+)
+_VENDOR_LONG_BRANDS = [k for k in _VENDOR_KNOWN_BRANDS if len(k) > 3]
+
+_VENDOR_SHORT_PATTERN: Optional[re.Pattern] = (
+    re.compile(
+        r'\b(' + '|'.join(re.escape(k) for k in _VENDOR_SHORT_BRANDS) + r')\b',
+        re.IGNORECASE,
+    )
+    if _VENDOR_SHORT_BRANDS
+    else None
+)
+
+_VENDOR_LEGAL_ENTITIES = ['s.r.o', 'a.s', 'spol', 'spol. s r.o', 'k.s', 'gmbh']
+
+# IČO/DIČ — require "CZ" followed by 8-10 digits (bare "cz" is too loose)
+_VENDOR_ICO_DIC = re.compile(
+    r"(?:ič\s*:|ičo\s*:|dič\s*:|cz\s*\d{8,10})",
+    re.IGNORECASE,
+)
+
+
+# ==========================================
+# MyOCR CLASS
+# ==========================================
 
 class MyOCR:
     """
-    Wrapper class for EasyOCR with additional functionalities.
-    
+    Wrapper class for EasyOCR with image caching and preprocessing.
+
     Attributes:
-        reader (easyocr.Reader): The EasyOCR reader instance.
+        reader (easyocr.Reader): The shared EasyOCR reader instance.
         current_data (list): The last OCR result data.
         current_image_path (str): The path of the last processed image.
     """
@@ -21,387 +123,390 @@ class MyOCR:
             print("Inicializace OCR modelu...")
             MyOCR._reader = easyocr.Reader(['en', 'cs'], gpu=True)
 
-
         self.reader = MyOCR._reader
         self.current_data: Optional[List[Any]] = None
-        self.current_image_path = None
+        self.current_image_path: Optional[str] = None
+        self._cached_image_np: Optional[np.ndarray] = None
+        self._cached_image_path: Optional[str] = None
 
+    # ------------------------------------------------------------------
+    # Image preprocessing helpers
+    # ------------------------------------------------------------------
 
-    def analyze_image(self, path: str):
+    @staticmethod
+    def _preprocess_pil(img: Image.Image) -> np.ndarray:
         """
-        Analyzes the image at the given path and performs OCR.
-        Args:
-            path (str): Path to the image file.
-        Returns:
-            List[Any] | None: OCR result data."""
-        
+        Convert a PIL image to a preprocessed grayscale numpy array.
+
+        Steps: EXIF fix -> grayscale -> contrast boost -> light sharpen.
+        """
+        img = ImageOps.exif_transpose(img)
+        img = img.convert('L')
+
+        # Boost contrast (helps with faded receipts)
+        enhancer = ImageEnhance.Contrast(img)
+        img = enhancer.enhance(1.5)
+
+        # Mild sharpen to help EasyOCR with blurry photos
+        img = img.filter(ImageFilter.SHARPEN)
+
+        return np.array(img)
+
+    def _get_image_np(self, path: str) -> Optional[np.ndarray]:
+        """Return preprocessed numpy array for *path*, using cache when possible."""
+        if self._cached_image_path == path and self._cached_image_np is not None:
+            return self._cached_image_np
+
         if not os.path.exists(path):
-            print(f"(-)File does not exist: {path}")
             return None
-        
+
+        try:
+            img = Image.open(path)
+            arr = self._preprocess_pil(img)
+            self._cached_image_np = arr
+            self._cached_image_path = path
+            return arr
+        except Exception as e:
+            print(f"(-) Chyba při přípravě obrázku: {e}")
+            return None
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def analyze_image(self, path: str) -> Optional[List[Any]]:
+        """
+        Analyze the image at *path* and perform full-page OCR.
+
+        The preprocessed image is cached so that subsequent
+        ``get_text_from_region`` calls skip disk I/O.
+
+        Args:
+            path: Path to the image file.
+        Returns:
+            OCR result list or None on failure.
+        """
+        if not os.path.exists(path):
+            print(f"(-) Soubor neexistuje: {path}")
+            return None
+
         self.current_image_path = path
-        
-        # 1. Preprocess Image if needed
-        try:
-            img  = Image.open(path)
-            img = ImageOps.exif_transpose(img)
-            img = img.convert('L') # Grayscale
-
-            if img.format != 'PNG':
-                new_path = os.path.splitext(path)[0] + "_converted.png"
-                img.save(new_path, format='PNG')
-                path_to_ocr = new_path
-            else:
-                path_to_ocr = path
-        except Exception as e:
-            print(f"(-)Error while preparing image: {e}")
+        img_np = self._get_image_np(path)
+        if img_np is None:
             return None
 
-        print(f"(+)Processing OCR for file: {path}")
-        
-        # 2. Run OCR
+        print(f"(+) Zpracovávám OCR pro soubor: {path}")
+
         try:
-            self.current_data = self.reader.readtext(path_to_ocr)
+            self.current_data = self.reader.readtext(img_np)
         except Exception as e:
-            print(f"(-)ERROR: {e}")
+            print(f"(-) CHYBA: {e}")
             self.current_data = None
-        finally:
-            # 3. Clean up temporary file if created
-            if path_to_ocr != path and os.path.exists(path_to_ocr):
-                os.remove(path_to_ocr)
 
         return self.current_data
-    
+
     def get_text_from_region(self, path: str, coords: List[List[int]]) -> str:
         """
-        Execute OCR on a specific region of the image defined by coordinates.
-        
+        Run OCR on a specific region of the image defined by *coords*.
+
+        Uses the cached preprocessed image when available, avoiding
+        redundant disk reads and conversions.
+
         Args:
-            path (str): Path to the image file.
-            coords (list): List of points [[x1, y1], [x2, y1], [x2, y2], [x1, y2]] 
-                           or just a bounding box.
-        
+            path: Path to the image file.
+            coords: Bounding polygon [[x1,y1], [x2,y1], [x2,y2], [x1,y2]].
         Returns:
-            str: Found text joined into a single string.
+            Recognized text as a single string (empty on failure).
         """
-        if not os.path.exists(path):
-            return "(-)File does not exist."
+        img_np = self._get_image_np(path)
+        if img_np is None:
+            return "(-) Soubor neexistuje."
 
         try:
-            # 1. Load Image
-            img = Image.open(path)
-            img = ImageOps.exif_transpose(img) # Rotate according to EXIF data
+            h, w = img_np.shape[:2]
 
-            img = img.convert('L') # Convert to grayscale
-            
-            # 2. Calculate Bounding Box (min_x, min_y, max_x, max_y)
-            # This ensures it works whether you send 4 points (polygon) or just 2 points (bounding box)
-            xs = [point[0] for point in coords]
-            ys = [point[1] for point in coords]
-            
+            xs = [pt[0] for pt in coords]
+            ys = [pt[1] for pt in coords]
+
             min_x = max(0, min(xs))
             min_y = max(0, min(ys))
-            max_x = min(img.width, max(xs))
-            max_y = min(img.height, max(ys))
+            max_x = min(w, max(xs))
+            max_y = min(h, max(ys))
 
-            # If selection is too small (e.g., accidentally clicked), return empty
+            # Skip accidental single-pixel selections
             if (max_x - min_x) < 5 or (max_y - min_y) < 5:
                 return ""
 
-            # 3. Crop Image to the defined region
-            cropped_img = img.crop((min_x, min_y, max_x, max_y))
-
-            # 4. Convert for EasyOCR (PIL -> Numpy Array)
-            img_np = np.array(cropped_img)
-
-            # 5. Run OCR on the cropped image
-            results = self.reader.readtext(img_np,)
+            cropped = img_np[min_y:max_y, min_x:max_x]
+            results = self.reader.readtext(cropped)
             return _make_string(results)
-            
-            # Join found lines into a single text
-        #     return "".join([str(x) for x in results])
+
         except Exception as e:
-            print(f"Error during OCR on the cropped region: {e}")
+            print(f"Chyba OCR na výřezu: {e}")
             return ""
-    
-    def get_price_coords(self):
-        """Returns the price coordinates from the current OCR data."""
+
+    def get_price_coords(self) -> Tuple[Optional[List], str]:
+        """Returns (coords, text) tuple for the detected price."""
         return ReturnPrice(self.current_data)
 
-    def get_date(self):
-        """Returns (coords, text) from the current OCR data."""
+    def get_date(self) -> Tuple[Optional[List], str]:
+        """Returns (coords, text) tuple for the detected date."""
         return ReturnDate(self.current_data)
-    
-    def get_vendor_coords(self):
-        """Returns the vendor coordinates from the current OCR data."""
+
+    def get_vendor_coords(self) -> Tuple[Optional[List], str]:
+        """Returns (coords, text) tuple for the detected vendor."""
         return ReturnVendor(self.current_data)
-    
 
 
 # ==========================================
 # STANDALONE HELPER FUNCTIONS (Logic Only)
 # ==========================================
 
-def ReturnPrice(data):
-    """Parses the raw OCR list to find price coordinates."""
+def ReturnPrice(data: Optional[List]) -> Tuple[Optional[List], str]:
+    """
+    Find the total price in OCR results.
+
+    Strategy:
+      1. Search BOTTOM-UP (totals are near the end of receipts).
+      2. Prefer lines where a keyword + price appear together.
+      3. Fall back to keyword-only line and grab price from the next 1-2 lines.
+      4. Skip lines containing blacklisted words (DPH, sleva, …).
+    """
     if not data:
         return None, ""
-    
 
-    keywords = r"(?:celkem|suma|k platbě|spolu|spolu k úhradě|k úhradě|stka|celková částka|celkový součet|total|amount due|amount payable|total amount|sum total|grand total|invoice total|balance due|total due|total payable|total amount due|total amount payable|celkem k úhradě|částka k úhradě|částka celkem|fakturováno celkem|fakturováno k úhradě)"
-    price_pattern = r"\d[\d\s.,]*[.,]\d{2}\b"
+    # Pass 1: bottom-up scan for keyword+price on the same line
+    for i in range(len(data) - 1, -1, -1):
+        item = data[i]
+        text = item[1]
+        if not isinstance(text, str):
+            continue
 
-    full_pattern = f"(?i){keywords}.*?({price_pattern})"
+        if _PRICE_BLACKLIST.search(text):
+            continue
 
-    keywords_only_pattern = re.compile(f"(?i){keywords}")
-    price_regex_standalone = re.compile(price_pattern)
-
-    for i, item in enumerate(data):
-        coords = item[0]
-        text_original = item[1]
-
-        if not isinstance(text_original, str): continue
-
-        match = re.search(full_pattern, text_original.lower())
+        match = _PRICE_FULL.search(text)
         if match:
             raw_price = match.group(1)
-            final_price = _clean_price_string(raw_price)
-
             if _clean_price_string(raw_price):
-                # Found full match with price
-                return _clean_coords_helper(coords), raw_price
-            
-        # If only keywords matched, look at next line for price    
-        if keywords_only_pattern.search(text_original.lower()):
-            if i +1 < len(data):
-                next_item = data[i+1]
-                next_text = next_item[1]
+                return _clean_coords_helper(item[0]), raw_price
 
-                price_match = price_regex_standalone.search(next_text)
+    # Pass 2: keyword on one line, price on the next 1-2 lines
+    for i, item in enumerate(data):
+        text = item[1]
+        if not isinstance(text, str):
+            continue
 
-                if price_match:
-                    raw_next = price_match.group(0)
-                    if _clean_price_string(raw_next):
-                        return _clean_coords_helper(next_item[0]), raw_next
+        if _PRICE_BLACKLIST.search(text):
+            continue
+
+        if _PRICE_KEYWORDS.search(text):
+            for offset in (1, 2):
+                if i + offset < len(data):
+                    next_text = data[i + offset][1]
+                    if not isinstance(next_text, str):
+                        continue
+                    price_match = _PRICE_NUMBER.search(next_text)
+                    if price_match:
+                        raw_next = price_match.group(0)
+                        if _clean_price_string(raw_next):
+                            return _clean_coords_helper(data[i + offset][0]), raw_next
+
     return None, ""
 
 
-def ReturnDate(data):
-    """Parses the raw OCR list to find date coordinates."""
+def ReturnDate(data: Optional[List]) -> Tuple[Optional[List], str]:
+    """
+    Find the invoice/receipt date in OCR results.
+
+    Strategy:
+      1. First pass: look for a date on a line that also contains a date-
+         related keyword ("datum", "dne", "date", …).  This avoids picking
+         up unrelated dates (print timestamps, expiry dates, etc.).
+      2. Second pass: fall back to the first date-like string in the data.
+    """
     if not data:
         return None, ""
-    
-    print(_make_string(data))
 
-    
-    patterns = [
-        r"\b\d{1,2}\s*[.,]\s*\d{1,2}\s*[.,]\s*\d{2,4}", # DD.MM.YYYY
-        r"\b\d{1,2}\s*[\-/]\s*\d{1,2}\s*[\-/]\s*\d{2,4}", # DD-MM-YYYY
-        r"\b\d{4}\s*[.\-/]\s*\d{1,2}\s*[.\-/]\s*\d{1,2}", # YYYY-MM-DD
-        r"\b\d{1,2}\s+\d{1,2}\s+\d{4}" # Spaced
-    ]
+    # Pass 1: date on a line with a keyword (high confidence)
+    for res in data:
+        txt = res[1]
+        if not isinstance(txt, str):
+            continue
 
-    
-    for i, res in enumerate(data):
-        txt_original = res[1]
-        if not isinstance(txt_original, str): continue
+        if _DATE_KEYWORDS.search(txt):
+            for pat in _DATE_PATTERNS:
+                match = pat.search(txt)
+                if match:
+                    return _clean_coords_helper(res[0]), match.group(0)
 
-        for pat in patterns:
-            match = re.search(pat, txt_original)
+    # Pass 2: first date anywhere (fallback)
+    for res in data:
+        txt = res[1]
+        if not isinstance(txt, str):
+            continue
+
+        for pat in _DATE_PATTERNS:
+            match = pat.search(txt)
             if match:
-                found_text = match.group(0)
-                print(f"Date Simple Match: {found_text}, Original: {txt_original}")
-                return _clean_coords_helper(res[0]), found_text
-            
+                return _clean_coords_helper(res[0]), match.group(0)
+
     return None, ""
 
 
-def ReturnVendor(data):
+def ReturnVendor(data: Optional[List]) -> Tuple[Optional[List], str]:
+    """
+    Find the vendor/seller name in OCR results.
+
+    Priority order:
+      1. Known chain brand names (exact match).
+      2. Legal entity suffixes (s.r.o., a.s., spol., gmbh).
+      3. Keywords "dodavatel" / "prodávající".
+      4. IČO/DIČ line — take the line before it.
+    """
     if not data:
         return None, ""
-        
-    legal_entities = ['s.r.o', 'a.s', 'spol', 'spol. s r.o', 'k.s', 'gmbh']
 
-    keywords = [
-    # Grocery stores and supermarkets
-    'tesco', 'kaufland', 'lidl', 'aldi', 'billa', 'albert', 'penny', 'globus', 
-    'makro', 'coop', 'hruska', 'norma', 'zabka', 'terno', 'tamda', 'flop', 
-    'jip', 'enapo', 'cba', 
+    # --- Priority 1: Known brand names ---
+    for res in data:
+        txt = res[1]
+        if not isinstance(txt, str):
+            continue
+        txt_lower = txt.lower()
 
-    # Drugstores and pharmacies
-    'dm drogerie', 'rossmann', 'teta', 'dr.max', 'benu', 'pilulka', 'drmax',
-
-    # Hobby markets, furniture and garden
-    'obi', 'hornbach', 'bauhaus', 'baumax', 'uni hobby', 'ikea', 'jysk', 
-    'xxllutz', 'mobelix', 'siko', 'mountfield', 'hecht', 'decodom', 'asko',
-
-    # Electronic
-    'alza', 'czc', 'datart', 'electro world', 'planeo', 'okay', 'smarty', 
-    'istyle', 'mironet', 'tsbohemia', 
-
-    # Clothing and sport
-    'decathlon', 'sportisimo', 'h&m', 'c&a', 'zara', 'pepco', 'kik', 'takko', 
-    'action', 'tedi', 'new yorker', 'deichmann', 'ccc', 'bata', 'humanic', 
-    'a3 sport', 'intersport', 'alpine pro',
-
-    # Oils and gas stations
-    'shell', 'omv', 'benzina', 'orlen', 'mol', 'eurooil', 'tank ono', 
-    'robin oil', 'km prona',
-
-    # Fast food and cafes
-    'mcdonald', 'kfc', 'burger king', 'starbucks', 'costa coffee', 
-    'bageterie boulevard', 'paul', 'ugova cerstva stava'
-    ]
-
-    # 1. Priority: Direct matches with keywords (known chains)
-
-    strict_keywords = [k for k in keywords if len(k) <= 3]
-    lossy_keywords = [k for k in keywords if len(k) > 3]
-
-    strict_pattern = None
-    if strict_keywords:
-        strict_sorted = sorted(strict_keywords, key=len, reverse=True)
-        strict_pattern = re.compile(r'\b(' + '|'.join(re.escape(k) for k in strict_sorted) + r')\b', re.IGNORECASE)
-
-    for i, res in enumerate(data):
-        txt_original = res[1]
-        if not isinstance(txt_original, str): continue
-        txt_lower = txt_original.lower()
-
-        # Long words 
-        for brand in lossy_keywords:
+        # Long brands — substring match is safe
+        for brand in _VENDOR_LONG_BRANDS:
             if brand in txt_lower:
                 return _clean_coords_helper(res[0]), brand
-        
-        # Short words - strict match
-        if strict_pattern:
-            match = strict_pattern.search(txt_lower)
-            if match:
-                normalized_brand = match.group(1).lower()
-                return _clean_coords_helper(res[0]), normalized_brand
-    
-        
-    # 2. Priority: Searching for legal entities (s.r.o., a.s., spol., etc.)
-    pattern_str = make_fuzzy_entity_regex(legal_entities)
-    pattern = re.compile(pattern_str, re.IGNORECASE)
 
-    for i in range(len(data)):
-        item = data[i]
-        text_original = item[1] # Entire line text, e.g., "BILLA BILLA SPOL , S R.o ..."
-        
-        # Use search, which returns a "match object"
-        match = pattern.search(text_original)
-        
-        if match:
-            # Get the index where the found keyword starts (e.g., where "SPOL" starts)
-            start_index = match.start()
-            
-            # Take the text BEFORE this index
-            vendor_candidate = text_original[:start_index].strip()
-            
-            # STEP A: Is there any text before 's.r.o.' on the same line?
-            if len(vendor_candidate) > 1: # >1 to avoid just noise
-                
-                return  _clean_coords_helper(item[0]), vendor_candidate 
-                
-            # STEP B: There is nothing on the line before s.r.o (s.r.o is at the beginning of the line)
+        # Short brands — word-boundary match to avoid false positives
+        if _VENDOR_SHORT_PATTERN:
+            m = _VENDOR_SHORT_PATTERN.search(txt_lower)
+            if m:
+                return _clean_coords_helper(res[0]), m.group(1).lower()
+
+    # --- Priority 2: Legal entity suffixes ---
+    entity_pattern = _get_legal_entity_pattern()
+    for i, item in enumerate(data):
+        txt = item[1]
+        if not isinstance(txt, str):
+            continue
+
+        m = entity_pattern.search(txt)
+        if m:
+            vendor_candidate = txt[:m.start()].strip()
+            # A: vendor name is before the suffix on the same line
+            if len(vendor_candidate) > 1:
+                return _clean_coords_helper(item[0]), vendor_candidate
+            # B: suffix at the start — vendor is on the previous line
             elif i > 0:
-                # Return the previous line from the list
-                return _clean_coords_helper(data[i-1][0]), data[i-1][1]
+                prev = data[i - 1]
+                return _clean_coords_helper(prev[0]), prev[1]
 
-    # 3. Priority: Keyword "dodávající" or "prod" and take the next line
+    # --- Priority 3: "dodavatel" / "prodávající" keywords ---
     for i, item in enumerate(data):
-        text_lower = item[1].lower()
-        if 'dodavatel' in text_lower or 'prodávající' in text_lower:
-            # If the line contains more text (e.g., "Supplier: Tesco a.s."), return it
-            if len(item[1]) > 12: 
+        txt_lower = item[1].lower() if isinstance(item[1], str) else ""
+        if 'dodavatel' in txt_lower or 'prodávající' in txt_lower:
+            if len(item[1]) > 12:
                 return _clean_coords_helper(item[0]), item[1]
-            # If it's just the heading "Supplier:", return the NEXT line
             elif i + 1 < len(data):
-                return _clean_coords_helper(data[i+1][0]), data[i+1][1]
+                nxt = data[i + 1]
+                return _clean_coords_helper(nxt[0]), nxt[1]
 
-
-    # 4. Priority: Find IČO/DIČ and take the line BEFORE it
+    # --- Priority 4: IČO/DIČ — take the preceding line ---
     for i, item in enumerate(data):
-        text_lower = item[1].lower()
-        # Searching for IČ/DIČ patterns
-        if 'ič:' in text_lower or 'ičo:' in text_lower or 'dič:' in text_lower or 'cz' in text_lower:
-            # If we are not on the very first line, return the previous one
+        txt = item[1]
+        if not isinstance(txt, str):
+            continue
+        if _VENDOR_ICO_DIC.search(txt):
             if i > 0:
-                return _clean_coords_helper(data[i-1][0]), data[i-1][1]
+                prev = data[i - 1]
+                return _clean_coords_helper(prev[0]), prev[1]
 
     return None, ""
-    
-def _make_string(data):
-    """Internal helper to concatenate all recognized text."""
+
+
+# ==========================================
+# INTERNAL HELPERS
+# ==========================================
+
+def _make_string(data: Optional[List]) -> str:
+    """Concatenate all recognized text fragments into one string."""
     if not data:
         return ""
-    texts = [res[1] for res in data if isinstance(res[1], str)]
-    return "".join(texts)
+    return " ".join(res[1] for res in data if isinstance(res[1], str))
 
 
-def _clean_coords_helper(raw_box):
-    """Internal helper to format coordinates."""
+def _clean_coords_helper(raw_box) -> Optional[List[List[int]]]:
+    """Convert EasyOCR coordinate tuples to a clean list of [x, y] ints."""
     if not raw_box:
         return None
     try:
-        cleaned = []
-        for point in raw_box:
-            cleaned.append([int(point[0]), int(point[1])])
-        return cleaned
+        return [[int(pt[0]), int(pt[1])] for pt in raw_box]
     except Exception:
         return None
 
-def make_fuzzy_entity_regex(terms):
+
+# Cache the compiled legal-entity regex (built once on first call)
+_legal_entity_regex_cache: Optional[re.Pattern] = None
+
+
+def _get_legal_entity_pattern() -> re.Pattern:
+    """Return (and cache) the fuzzy regex for legal entity suffixes."""
+    global _legal_entity_regex_cache
+    if _legal_entity_regex_cache is None:
+        _legal_entity_regex_cache = re.compile(
+            _make_fuzzy_entity_regex(_VENDOR_LEGAL_ENTITIES),
+            re.IGNORECASE,
+        )
+    return _legal_entity_regex_cache
+
+
+def _make_fuzzy_entity_regex(terms: List[str]) -> str:
     """
-    Helpers to create fuzzy regex patterns for legal entity terms.
-    Args:
-        terms (list): List of legal entity terms (e.g., ['s.r.o', 'a.s']).
-    Returns:
-        str: Compiled regex pattern string.
+    Build a fuzzy regex string for legal entity terms.
+
+    Accounts for common OCR misreads (o/0, s/5, i/1/l, etc.)
+    and flexible punctuation between characters.
     """
     replacements = {
-        'o': '[o0]',       # Letter o and zero
-        '0': '[o0]',       
-        'i': '[i1l|]',     # i, one, lowercase L, vertical bar
+        'o': '[o0]',
+        '0': '[o0]',
+        'i': '[i1l|]',
         'l': '[i1l|]',
         '1': '[i1l|]',
-        's': '[s5]',       # s and five         
-        'z': '[z2]',       # z and two
-        'b': '[b8]',       # b and eight
+        's': '[s5]',
+        'z': '[z2]',
+        'b': '[b8]',
     }
 
-    patterns = []
-
+    parts: List[str] = []
     for term in terms:
         clean = term.lower().replace('.', '').replace(' ', '')
+        char_classes = [replacements.get(c, re.escape(c)) for c in clean]
+        fuzzy = r'[\.\,\s]*'.join(char_classes) + r'[\.\,\s]*'
+        parts.append(fuzzy)
 
-        char_pattern = []
-        for char in clean:
-            char_pattern.append(replacements.get(char, char))
-            
-        fuzzy_pattern = r'[\.\,\s]*'.join(char_pattern) + r'[\.\,\s]*'
-        patterns.append(fuzzy_pattern)
-    return r'(?:\s|^)(' + '|'.join(patterns) + r').*'
+    return r'(?:\s|^)(' + '|'.join(parts) + r').*'
+
 
 def _clean_price_string(price_str: str) -> Optional[float]:
     """
-    Pomocná funkce pro čištění stringu ceny.
-    Převede "1 200,50" -> 1200.5
+    Clean a price string and convert it to float.
+
+    Examples: "1 200,50" -> 1200.5, "99.90 Kč" -> 99.9
     """
     if not price_str:
         return None
 
-    # 1. Remove everything except digits, commas, and dots
-    # (This removes 'Kč', 'EUR', letters, currency symbols)
+    # 1. Strip everything except digits, commas, and dots
     clean = re.sub(r"[^\d.,]", "", price_str)
-    
+
     # 2. Replace decimal comma with dot
     if "," in clean:
         clean = clean.replace(",", ".")
-    
-    # 3. Handle multiple dots (e.g., 1.200.50 -> 1200.50)
-    # Logic: All dots except the last one are thousand separators -> remove them
+
+    # 3. Multiple dots: all except the last are thousand separators
     if clean.count(".") > 1:
         parts = clean.split(".")
         clean = "".join(parts[:-1]) + "." + parts[-1]
@@ -410,4 +515,3 @@ def _clean_price_string(price_str: str) -> Optional[float]:
         return float(clean)
     except ValueError:
         return None
-    

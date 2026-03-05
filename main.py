@@ -43,7 +43,6 @@ def main():
             'filename': filename
         }
 
-        # Zápis
         if handler.add_invoice_entry(output_file, excel_data):
             print("  -> OK")
             saved_count += 1
